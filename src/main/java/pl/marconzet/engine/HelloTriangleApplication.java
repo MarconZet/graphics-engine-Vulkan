@@ -13,6 +13,7 @@ import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.EXTDebugReport.*;
 import static org.lwjgl.vulkan.EXTDebugReport.vkCreateDebugReportCallbackEXT;
+import static org.lwjgl.vulkan.KHRSurface.VK_KHR_SURFACE_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
 import static pl.marconzet.engine.VKUtil.translateVulkanResult;
 
@@ -72,21 +73,16 @@ public class HelloTriangleApplication {
         indices = new QueueFamilyIndices(physicalDevice);
         FloatBuffer pQueuePriorities = BufferUtils.createFloatBuffer(1).put(1.0f);
         pQueuePriorities.flip();
-
-
-        VkDeviceQueueCreateInfo queueCreateInfo = VkDeviceQueueCreateInfo.calloc()
+        VkDeviceQueueCreateInfo.Buffer queueCreateInfo = VkDeviceQueueCreateInfo.calloc(1)
                 .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
                 .queueFamilyIndex(indices.getGraphicsFamily())
                 .pQueuePriorities(pQueuePriorities);
 
-        VkDeviceQueueCreateInfo.Buffer pQueueCreateInfos = VkDeviceQueueCreateInfo.calloc(1)
-                .put(queueCreateInfo);
-
         VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
-
         VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.calloc()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
-                .pQueueCreateInfos(pQueueCreateInfos)
+                .pNext(NULL)
+                .pQueueCreateInfos(queueCreateInfo)
                 .pEnabledFeatures(deviceFeatures);
 
         if(ENABLE_VALIDATION_LAYERS) {
@@ -101,8 +97,7 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create device: " + translateVulkanResult(err));
         }
-        VkDevice device = new VkDevice(pDevice.get(0), physicalDevice, pCreateInfo);
-        return device;
+        return new VkDevice(pDevice.get(0), physicalDevice, pCreateInfo);
     }
 
     private VkPhysicalDevice pickPhysicalDevice() {
@@ -221,9 +216,10 @@ public class HelloTriangleApplication {
         }
         if(!ENABLE_VALIDATION_LAYERS)
             return ppRequiredExtensions;
-        PointerBuffer ppEnabledExtensionNames = BufferUtils.createPointerBuffer(ppExtensions.remaining() + 1);
+        PointerBuffer ppEnabledExtensionNames = BufferUtils.createPointerBuffer(ppExtensions.remaining() + 2);
         ppEnabledExtensionNames.put(ppRequiredExtensions);
         ppEnabledExtensionNames.put(memUTF8(VK_EXT_DEBUG_REPORT_EXTENSION_NAME));
+        ppEnabledExtensionNames.put(memUTF8(VK_KHR_SURFACE_EXTENSION_NAME));
 
         return ppEnabledExtensionNames;
     }
