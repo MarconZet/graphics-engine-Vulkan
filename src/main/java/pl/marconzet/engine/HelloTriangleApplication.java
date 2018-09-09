@@ -4,6 +4,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
 
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
@@ -32,6 +33,10 @@ public class HelloTriangleApplication {
     private VkInstance instance;
     private long debugCallbackHandle;
     private VkPhysicalDevice physicalDevice;
+    private QueueFamilyIndices indices;
+    private VkDevice device;
+    private VkQueue graphicsQueue;
+
 
     public void run(){
         initWindow();
@@ -53,6 +58,51 @@ public class HelloTriangleApplication {
         instance = createInstance();
         debugCallbackHandle = setupDebugCallback();
         physicalDevice = pickPhysicalDevice();
+        device = createLogicalDevice();
+        graphicsQueue = getGraphicsQueue();
+    }
+
+    private VkQueue getGraphicsQueue() {
+        PointerBuffer pQueue = BufferUtils.createPointerBuffer(1);
+        vkGetDeviceQueue(device, indices.getGraphicsFamily(), 0, pQueue);
+        return new VkQueue(pQueue.get(), device);
+    }
+
+    private VkDevice createLogicalDevice() {
+        indices = new QueueFamilyIndices(physicalDevice);
+        FloatBuffer pQueuePriorities = BufferUtils.createFloatBuffer(1).put(1.0f);
+        pQueuePriorities.flip();
+
+
+        VkDeviceQueueCreateInfo queueCreateInfo = VkDeviceQueueCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+                .queueFamilyIndex(indices.getGraphicsFamily())
+                .pQueuePriorities(pQueuePriorities);
+
+        VkDeviceQueueCreateInfo.Buffer pQueueCreateInfos = VkDeviceQueueCreateInfo.calloc(1)
+                .put(queueCreateInfo);
+
+        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
+
+        VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
+                .pQueueCreateInfos(pQueueCreateInfos)
+                .pEnabledFeatures(deviceFeatures);
+
+        if(ENABLE_VALIDATION_LAYERS) {
+            PointerBuffer ppValidationLayers = BufferUtils.createPointerBuffer(VALIDATION_LAYERS.length);
+            for (String layer : VALIDATION_LAYERS) {
+                ppValidationLayers.put(memUTF8(layer));
+            }
+            pCreateInfo.ppEnabledLayerNames(ppValidationLayers.flip());
+        }
+        PointerBuffer pDevice = BufferUtils.createPointerBuffer(1);
+        int err = vkCreateDevice(physicalDevice, pCreateInfo, null, pDevice);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create device: " + translateVulkanResult(err));
+        }
+        VkDevice device = new VkDevice(pDevice.get(0), physicalDevice, pCreateInfo);
+        return device;
     }
 
     private VkPhysicalDevice pickPhysicalDevice() {
@@ -94,7 +144,7 @@ public class HelloTriangleApplication {
                 return 0;
             }
         };
-        return setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT | VK_DEBUG_REPORT_INFORMATION_BIT_EXT, debugCallback);
+        return setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT, debugCallback);
     }
 
     private long setupDebugging(VkInstance instance, int flags, VkDebugReportCallbackEXT callback) {
@@ -212,6 +262,8 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        vkDestroyDevice(device, null);
+
         vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
 
         vkDestroyInstance(instance, null);

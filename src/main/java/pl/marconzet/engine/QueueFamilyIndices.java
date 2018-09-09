@@ -43,4 +43,8 @@ public class QueueFamilyIndices {
     public boolean isComplete() {
         return graphicsFamily >= 0;
     }
+
+    public int getGraphicsFamily() {
+        return graphicsFamily;
+    }
 }
