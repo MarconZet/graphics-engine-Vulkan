@@ -31,6 +31,7 @@ public class HelloTriangleApplication {
     private long window;
     private VkInstance instance;
     private long debugCallbackHandle;
+    private VkPhysicalDevice physicalDevice;
 
     public void run(){
         initWindow();
@@ -50,13 +51,47 @@ public class HelloTriangleApplication {
 
     private void initVulkan() {
         instance = createInstance();
+        debugCallbackHandle = setupDebugCallback();
+        physicalDevice = pickPhysicalDevice();
+    }
+
+    private VkPhysicalDevice pickPhysicalDevice() {
+        IntBuffer pDeviceCount = BufferUtils.createIntBuffer(1);
+        vkEnumeratePhysicalDevices(instance, pDeviceCount, null);
+        int deviceCount = pDeviceCount.get(0);
+
+        if (deviceCount == 0) {
+            throw new RuntimeException("failed to find GPUs with Vulkan support!");
+        }
+
+        PointerBuffer pDevices = BufferUtils.createPointerBuffer(deviceCount);
+        vkEnumeratePhysicalDevices(instance, pDeviceCount, pDevices);
+        while(pDevices.hasRemaining()){
+            VkPhysicalDevice physicalDevice = new VkPhysicalDevice(pDevices.get(), instance);
+            if(isDeviceSuitable(physicalDevice))
+                return physicalDevice;
+        }
+
+        throw new RuntimeException("failed to find a suitable GPU!");
+    }
+
+    private boolean isDeviceSuitable(VkPhysicalDevice device) {
+        VkPhysicalDeviceProperties deviceProperties = VkPhysicalDeviceProperties.calloc();
+        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
+        vkGetPhysicalDeviceProperties(device, deviceProperties);
+        vkGetPhysicalDeviceFeatures(device, deviceFeatures);
+
+        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader();
+    }
+
+    private long setupDebugCallback() {
         VkDebugReportCallbackEXT debugCallback = new VkDebugReportCallbackEXT() {
             public int invoke(int flags, int objectType, long object, long location, int messageCode, long pLayerPrefix, long pMessage, long pUserData) {
                 System.out.println("validation layer: " + VkDebugReportCallbackEXT.getString(pMessage));
                 return 0;
             }
         };
-        debugCallbackHandle = setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT | VK_DEBUG_REPORT_INFORMATION_BIT_EXT, debugCallback);
+        return setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT | VK_DEBUG_REPORT_INFORMATION_BIT_EXT, debugCallback);
     }
 
     private long setupDebugging(VkInstance instance, int flags, VkDebugReportCallbackEXT callback) {
