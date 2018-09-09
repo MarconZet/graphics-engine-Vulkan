@@ -81,8 +81,11 @@ public class HelloTriangleApplication {
         vkGetPhysicalDeviceProperties(device, deviceProperties);
         vkGetPhysicalDeviceFeatures(device, deviceFeatures);
 
-        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader();
+        QueueFamilyIndices familyIndices = new QueueFamilyIndices(device);
+
+        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader() && familyIndices.isComplete();
     }
+
 
     private long setupDebugCallback() {
         VkDebugReportCallbackEXT debugCallback = new VkDebugReportCallbackEXT() {
@@ -153,7 +156,7 @@ public class HelloTriangleApplication {
         IntBuffer pExtensionCount = BufferUtils.createIntBuffer(1);
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, null);
         int extensionCount = pExtensionCount.get();
-        VkExtensionProperties.Buffer ppExtensions = new VkExtensionProperties.Buffer(BufferUtils.createByteBuffer(VkExtensionProperties.SIZEOF * extensionCount));
+        VkExtensionProperties.Buffer ppExtensions = VkExtensionProperties.calloc(extensionCount);
         pExtensionCount.clear();
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, ppExtensions);
         /*System.out.println("Available extensions:");
@@ -180,7 +183,7 @@ public class HelloTriangleApplication {
         vkEnumerateInstanceLayerProperties(pLayerCount, null);
         int layerCount = pLayerCount.get(0);
 
-        VkLayerProperties.Buffer pAvailableLayers = new VkLayerProperties.Buffer(BufferUtils.createByteBuffer(VkLayerProperties.SIZEOF * layerCount));
+        VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.calloc(layerCount);
         vkEnumerateInstanceLayerProperties(pLayerCount, pAvailableLayers);
         /*System.out.println("Available layers:");
         while (pAvailableLayers.hasRemaining()) {
