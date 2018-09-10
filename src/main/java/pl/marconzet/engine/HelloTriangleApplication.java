@@ -9,11 +9,13 @@ import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.EXTDebugReport.*;
 import static org.lwjgl.vulkan.EXTDebugReport.vkCreateDebugReportCallbackEXT;
 import static org.lwjgl.vulkan.KHRSurface.VK_KHR_SURFACE_EXTENSION_NAME;
+import static org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR;
 import static org.lwjgl.vulkan.VK10.*;
 import static pl.marconzet.engine.VKUtil.translateVulkanResult;
 
@@ -33,10 +35,12 @@ public class HelloTriangleApplication {
     private long window;
     private VkInstance instance;
     private long debugCallbackHandle;
+    private long surface;
     private VkPhysicalDevice physicalDevice;
     private QueueFamilyIndices indices;
     private VkDevice device;
     private VkQueue graphicsQueue;
+    private VkQueue presentQueue;
 
 
     public void run(){
@@ -58,31 +62,49 @@ public class HelloTriangleApplication {
     private void initVulkan() {
         instance = createInstance();
         debugCallbackHandle = setupDebugCallback();
+        surface = createSurface();
         physicalDevice = pickPhysicalDevice();
         device = createLogicalDevice();
-        graphicsQueue = getGraphicsQueue();
+        graphicsQueue = createDeviceQueue(indices.getGraphicsFamily());
+        presentQueue = createDeviceQueue(indices.getPresentFamily());
     }
 
-    private VkQueue getGraphicsQueue() {
+    private long createSurface() {
+        LongBuffer pSurface = memAllocLong(1);
+        int err = glfwCreateWindowSurface(instance, window, null, pSurface);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create surface: " + translateVulkanResult(err));
+        }
+        return pSurface.get();
+    }
+
+    private VkQueue createDeviceQueue(int queueFamilyIndex) {
         PointerBuffer pQueue = BufferUtils.createPointerBuffer(1);
-        vkGetDeviceQueue(device, indices.getGraphicsFamily(), 0, pQueue);
+        vkGetDeviceQueue(device, queueFamilyIndex, 0, pQueue);
         return new VkQueue(pQueue.get(), device);
     }
 
     private VkDevice createLogicalDevice() {
-        indices = new QueueFamilyIndices(physicalDevice);
         FloatBuffer pQueuePriorities = BufferUtils.createFloatBuffer(1).put(1.0f);
         pQueuePriorities.flip();
-        VkDeviceQueueCreateInfo.Buffer queueCreateInfo = VkDeviceQueueCreateInfo.calloc(1)
-                .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
-                .queueFamilyIndex(indices.getGraphicsFamily())
-                .pQueuePriorities(pQueuePriorities);
+        VkDeviceQueueCreateInfo.Buffer pQueueCreateInfo = VkDeviceQueueCreateInfo.calloc(2).put(
+                VkDeviceQueueCreateInfo.calloc()
+                        .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+                        .queueFamilyIndex(indices.getGraphicsFamily())
+                        .pQueuePriorities(pQueuePriorities)
+        ).put(
+                VkDeviceQueueCreateInfo.calloc()
+                        .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+                        .queueFamilyIndex(indices.getPresentFamily())
+                        .pQueuePriorities(pQueuePriorities)
+        );
+        pQueueCreateInfo.flip();
 
         VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
         VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.calloc()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
                 .pNext(NULL)
-                .pQueueCreateInfos(queueCreateInfo)
+                .pQueueCreateInfos(pQueueCreateInfo)
                 .pEnabledFeatures(deviceFeatures);
 
         if(ENABLE_VALIDATION_LAYERS) {
@@ -120,15 +142,15 @@ public class HelloTriangleApplication {
         throw new RuntimeException("failed to find a suitable GPU!");
     }
 
-    private boolean isDeviceSuitable(VkPhysicalDevice device) {
+    private boolean isDeviceSuitable(VkPhysicalDevice physicalDevice) {
         VkPhysicalDeviceProperties deviceProperties = VkPhysicalDeviceProperties.calloc();
         VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
-        vkGetPhysicalDeviceProperties(device, deviceProperties);
-        vkGetPhysicalDeviceFeatures(device, deviceFeatures);
+        vkGetPhysicalDeviceProperties(physicalDevice, deviceProperties);
+        vkGetPhysicalDeviceFeatures(physicalDevice, deviceFeatures);
 
-        QueueFamilyIndices familyIndices = new QueueFamilyIndices(device);
+        indices = new QueueFamilyIndices(physicalDevice, surface);
 
-        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader() && familyIndices.isComplete();
+        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader() && indices.isComplete();
     }
 
 
@@ -259,13 +281,10 @@ public class HelloTriangleApplication {
 
     private void cleanup() {
         vkDestroyDevice(device, null);
-
         vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
-
+        vkDestroySurfaceKHR(instance, surface, null);
         vkDestroyInstance(instance, null);
-
         glfwDestroyWindow(window);
-
         glfwTerminate();
     }
 }
