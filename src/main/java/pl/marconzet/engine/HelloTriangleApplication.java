@@ -14,8 +14,10 @@ import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.EXTDebugReport.*;
 import static org.lwjgl.vulkan.EXTDebugReport.vkCreateDebugReportCallbackEXT;
+import static org.lwjgl.vulkan.KHRSurface.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSurface.VK_KHR_SURFACE_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 import static pl.marconzet.engine.VKUtil.translateVulkanResult;
 
@@ -27,9 +29,12 @@ import static pl.marconzet.engine.VKUtil.translateVulkanResult;
 public class HelloTriangleApplication {
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String[] VALIDATION_LAYERS = {"VK_LAYER_LUNARG_standard_validation"};
+    private static final String[] VALIDATION_LAYERS_INSTANCE_EXTENSIONS = {VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
+    private static final String[] INSTANCE_EXTENSIONS = {VK_KHR_SURFACE_EXTENSION_NAME};
+    private static final String[] DEVICE_EXTENSIONS = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-    private static final int WIDTH = 800;
-    private static final int HEIGHT = 600;
+    public static final int WIDTH = 800;
+    public static final int HEIGHT = 600;
 
 
     private long window;
@@ -38,9 +43,14 @@ public class HelloTriangleApplication {
     private long surface;
     private VkPhysicalDevice physicalDevice;
     private QueueFamilyIndices indices;
+    private SwapChainSupportDetails swapChainSupportDetails;
     private VkDevice device;
     private VkQueue graphicsQueue;
     private VkQueue presentQueue;
+    private long swapChain;
+    private long[] swapChainImages;
+    private int swapChainImageFormat;
+    private VkExtent2D swapChainExtent;
 
 
     public void run(){
@@ -67,6 +77,73 @@ public class HelloTriangleApplication {
         device = createLogicalDevice();
         graphicsQueue = createDeviceQueue(indices.getGraphicsFamily());
         presentQueue = createDeviceQueue(indices.getPresentFamily());
+        swapChain = createSwapChain();
+        swapChainImages = getSwapChainImages();
+    }
+
+    private long createSwapChain() {
+        SwapChainSupportDetails swapChainSupport = new SwapChainSupportDetails(physicalDevice, surface);
+
+        VkSurfaceFormatKHR surfaceFormat = swapChainSupport.chooseSwapSurfaceFormat();
+        int presentMode = swapChainSupport.chooseSwapPresentMode();
+        swapChainExtent = swapChainSupport.chooseSwapExtent();
+        swapChainImageFormat = surfaceFormat.format();
+
+        int imageCount = swapChainSupport.getCapabilities().minImageCount() + 1;
+        if(swapChainSupport.getCapabilities().maxImageCount() > 0){
+            imageCount = Math.min(imageCount, swapChainSupport.getCapabilities().maxImageCount());
+        }
+
+        VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc()
+                .sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR)
+                .surface(surface)
+                .minImageCount(imageCount)
+                .imageFormat(surfaceFormat.format())
+                .imageColorSpace(surfaceFormat.colorSpace())
+                .imageExtent(swapChainExtent)
+                .imageArrayLayers(1)
+                .imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+                .preTransform(swapChainSupport.getCapabilities().currentTransform())
+                .compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+                .presentMode(presentMode)
+                .clipped(true)
+                .oldSwapchain(VK_NULL_HANDLE);
+
+        int graphicsFamily = indices.getGraphicsFamily();
+        int presentFamily = indices.getPresentFamily();
+        IntBuffer queueFamilyIndices = BufferUtils.createIntBuffer(2)
+                .put(graphicsFamily)
+                .put(presentFamily);
+        queueFamilyIndices.flip();
+        if (graphicsFamily != presentFamily) {
+            createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT)
+                    .pQueueFamilyIndices(queueFamilyIndices);
+        } else {
+            createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE)
+                    .pQueueFamilyIndices(null);
+        }
+
+        LongBuffer pSwapChain = BufferUtils.createLongBuffer(1);
+        int err = vkCreateSwapchainKHR(device, createInfo, null, pSwapChain);
+        long swapChain = pSwapChain.get(0);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create swap chain: " + translateVulkanResult(err));
+        }
+
+
+
+
+        return swapChain;
+    }
+
+    private long[] getSwapChainImages() {
+        IntBuffer pImageCount = BufferUtils.createIntBuffer(1);
+        vkGetSwapchainImagesKHR(device, swapChain, pImageCount, null);
+        LongBuffer swapChainImages = BufferUtils.createLongBuffer(pImageCount.get(0));
+        vkGetSwapchainImagesKHR(device, swapChain, pImageCount, swapChainImages);
+        long[] res = new long[pImageCount.get(0)];
+        swapChainImages.get(res);
+        return res;
     }
 
     private long createSurface() {
@@ -100,12 +177,19 @@ public class HelloTriangleApplication {
         );
         pQueueCreateInfo.flip();
 
+        PointerBuffer ppExtensionNames = BufferUtils.createPointerBuffer(DEVICE_EXTENSIONS.length);
+        for (String extension : DEVICE_EXTENSIONS) {
+            ppExtensionNames.put(memUTF8(extension));
+        }
+        ppExtensionNames.flip();
+
         VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
         VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.calloc()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
                 .pNext(NULL)
                 .pQueueCreateInfos(pQueueCreateInfo)
-                .pEnabledFeatures(deviceFeatures);
+                .pEnabledFeatures(deviceFeatures)
+                .ppEnabledExtensionNames(ppExtensionNames);
 
         if(ENABLE_VALIDATION_LAYERS) {
             PointerBuffer ppValidationLayers = BufferUtils.createPointerBuffer(VALIDATION_LAYERS.length);
@@ -148,9 +232,39 @@ public class HelloTriangleApplication {
         vkGetPhysicalDeviceProperties(physicalDevice, deviceProperties);
         vkGetPhysicalDeviceFeatures(physicalDevice, deviceFeatures);
 
+        swapChainSupportDetails = new SwapChainSupportDetails(physicalDevice, surface);
+        boolean swapChainGood = swapChainSupportDetails.getFormats().sizeof() > 0 && swapChainSupportDetails.getPresentModes().hasRemaining();
+
+
+
         indices = new QueueFamilyIndices(physicalDevice, surface);
 
-        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && deviceFeatures.geometryShader() && indices.isComplete();
+        return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+                && deviceFeatures.geometryShader()
+                && indices.isComplete()
+                && checkDeviceExtensionSupport(physicalDevice)
+                && swapChainGood;
+    }
+
+    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device) {
+        IntBuffer pExtensionCount = BufferUtils.createIntBuffer(1);
+        vkEnumerateDeviceExtensionProperties(device, (CharSequence) null, pExtensionCount, null);
+        int extensionCount = pExtensionCount.get(0);
+        VkExtensionProperties.Buffer pAvailableExtensions = VkExtensionProperties.calloc(extensionCount);
+        vkEnumerateDeviceExtensionProperties(device, (CharSequence) null, pExtensionCount, pAvailableExtensions);
+
+
+        int found = 0;
+        for (String extension : DEVICE_EXTENSIONS) {
+            for (VkExtensionProperties extensionProperties : pAvailableExtensions) {
+                if(extensionProperties.extensionNameString().equals(extension)){
+                    found++;
+                    break;
+                }
+            }
+        }
+
+        return found == DEVICE_EXTENSIONS.length;
     }
 
 
@@ -195,11 +309,11 @@ public class HelloTriangleApplication {
                 .engineVersion(VK_MAKE_VERSION(1, 0, 0))
                 .apiVersion(VK_API_VERSION_1_0);
 
-        PointerBuffer ppEnabledExtensionNames = getExtensions();
+        PointerBuffer ppEnabledExtensionNames = getInstanceExtensions();
         VkInstanceCreateInfo pCreateInfo = VkInstanceCreateInfo.calloc()
                 .sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
                 .pApplicationInfo(appInfo)
-                .ppEnabledExtensionNames(ppEnabledExtensionNames.flip());
+                .ppEnabledExtensionNames(ppEnabledExtensionNames);
 
         if(ENABLE_VALIDATION_LAYERS){
             PointerBuffer ppValidationLayers = BufferUtils.createPointerBuffer(VALIDATION_LAYERS.length);
@@ -219,29 +333,34 @@ public class HelloTriangleApplication {
         return new VkInstance(instance, pCreateInfo);
     }
 
-    private PointerBuffer getExtensions() {
+    private PointerBuffer getInstanceExtensions() {
         IntBuffer pExtensionCount = BufferUtils.createIntBuffer(1);
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, null);
-        int extensionCount = pExtensionCount.get();
+        int extensionCount = pExtensionCount.get(0);
         VkExtensionProperties.Buffer ppExtensions = VkExtensionProperties.calloc(extensionCount);
-        pExtensionCount.clear();
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, ppExtensions);
-        /*System.out.println("Available extensions:");
-        while(ppExtensions.hasRemaining()){
-            System.out.println(ppExtensions.get().extensionNameString());
-        }
-        ppExtensions.rewind();*/
 
         PointerBuffer ppRequiredExtensions = glfwGetRequiredInstanceExtensions();
         if (ppRequiredExtensions == null) {
             throw new AssertionError("Failed to find list of required Vulkan extensions");
         }
-        if(!ENABLE_VALIDATION_LAYERS)
-            return ppRequiredExtensions;
-        PointerBuffer ppEnabledExtensionNames = BufferUtils.createPointerBuffer(ppExtensions.remaining() + 2);
+
+        int capacity = ppExtensions.remaining() + INSTANCE_EXTENSIONS.length;
+        if(ENABLE_VALIDATION_LAYERS) {
+            capacity += VALIDATION_LAYERS_INSTANCE_EXTENSIONS.length;
+        }
+
+        PointerBuffer ppEnabledExtensionNames = BufferUtils.createPointerBuffer(capacity);
         ppEnabledExtensionNames.put(ppRequiredExtensions);
-        ppEnabledExtensionNames.put(memUTF8(VK_EXT_DEBUG_REPORT_EXTENSION_NAME));
-        ppEnabledExtensionNames.put(memUTF8(VK_KHR_SURFACE_EXTENSION_NAME));
+        for (String extension : INSTANCE_EXTENSIONS) {
+            ppEnabledExtensionNames.put(memUTF8(extension));
+        }
+        if(ENABLE_VALIDATION_LAYERS) {
+            for (String extension : VALIDATION_LAYERS_INSTANCE_EXTENSIONS) {
+                ppEnabledExtensionNames.put(memUTF8(extension));
+            }
+        }
+        ppEnabledExtensionNames.flip();
 
         return ppEnabledExtensionNames;
     }
@@ -280,6 +399,7 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        vkDestroySwapchainKHR(device, swapChain, null);
         vkDestroyDevice(device, null);
         vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
         vkDestroySurfaceKHR(instance, surface, null);
