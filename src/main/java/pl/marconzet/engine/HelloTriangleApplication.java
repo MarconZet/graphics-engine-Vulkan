@@ -51,6 +51,7 @@ public class HelloTriangleApplication {
     private long[] swapChainImages;
     private int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
+    private long[] swapChainImageViews;
 
 
     public void run(){
@@ -79,6 +80,36 @@ public class HelloTriangleApplication {
         presentQueue = createDeviceQueue(indices.getPresentFamily());
         swapChain = createSwapChain();
         swapChainImages = getSwapChainImages();
+        swapChainImageViews = createImageViews();
+    }
+
+    private long[] createImageViews() {
+        long[] imageViews = new long[swapChainImages.length];
+        for (int i = 0; i < imageViews.length; i++) {
+            VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.calloc()
+                    .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+                    .image(swapChainImages[i])
+                    .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                    .format(swapChainImageFormat);
+            createInfo.components()
+                    .r(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    .g(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    .b(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    .a(VK_COMPONENT_SWIZZLE_IDENTITY);
+            createInfo.subresourceRange()
+                    .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    .baseMipLevel(0)
+                    .levelCount(1)
+                    .baseArrayLayer(0)
+                    .layerCount(1);
+            LongBuffer pBufferView = BufferUtils.createLongBuffer(1);
+            int err = vkCreateImageView(device, createInfo, null, pBufferView);
+            imageViews[i] = pBufferView.get(0);
+            if (err != VK_SUCCESS) {
+                throw new AssertionError("Failed to create image view: " + translateVulkanResult(err));
+            }
+        }
+        return imageViews;
     }
 
     private long createSwapChain() {
@@ -399,6 +430,9 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        for (long imageView : swapChainImageViews) {
+            vkDestroyImageView(device, imageView, null);
+        }
         vkDestroySwapchainKHR(device, swapChain, null);
         vkDestroyDevice(device, null);
         vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
