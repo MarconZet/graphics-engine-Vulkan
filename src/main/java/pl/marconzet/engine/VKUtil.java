@@ -1,6 +1,13 @@
 package pl.marconzet.engine;
 
-import static org.lwjgl.vulkan.EXTDebugReport.*;       
+import org.lwjgl.BufferUtils;
+
+import java.io.*;
+import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+
+import static org.lwjgl.vulkan.EXTDebugReport.*;
 import static org.lwjgl.vulkan.KHRDisplaySwapchain.*;     
 import static org.lwjgl.vulkan.KHRSurface.*;      
 import static org.lwjgl.vulkan.KHRSwapchain.*;        
@@ -69,8 +76,48 @@ public class VKUtil {
         case VK_ERROR_VALIDATION_FAILED_EXT:
             return "A validation layer found an error.";
         default:
-            return String.format("%s [%d]", "Unknown", Integer.valueOf(result));
+            return String.format("%s [%d]", "Unknown", result);
         }
+    }
+
+    public static ByteBuffer ioResourceToByteBuffer(String resource, int bufferSize) throws IOException {
+        ByteBuffer buffer;
+        URL url = Main.class.getResource(resource);
+        File file = new File(url.getFile());
+        if (file.isFile()) {
+            FileInputStream fis = new FileInputStream(file);
+            FileChannel fc = fis.getChannel();
+            buffer = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size());
+            fc.close();
+            fis.close();
+        } else {
+            buffer = BufferUtils.createByteBuffer(bufferSize);
+            InputStream source = url.openStream();
+            if (source == null)
+                throw new FileNotFoundException(resource);
+            try {
+                byte[] buf = new byte[8192];
+                while (true) {
+                    int bytes = source.read(buf, 0, buf.length);
+                    if (bytes == -1)
+                        break;
+                    if (buffer.remaining() < bytes)
+                        buffer = resizeBuffer(buffer, buffer.capacity() * 2);
+                    buffer.put(buf, 0, bytes);
+                }
+                buffer.flip();
+            } finally {
+                source.close();
+            }
+        }
+        return buffer;
+    }
+
+    private static ByteBuffer resizeBuffer(ByteBuffer buffer, int newCapacity) {
+        ByteBuffer newBuffer = BufferUtils.createByteBuffer(newCapacity);
+        buffer.flip();
+        newBuffer.put(buffer);
+        return newBuffer;
     }
 
 }

@@ -4,6 +4,8 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -19,6 +21,7 @@ import static org.lwjgl.vulkan.KHRSurface.VK_KHR_SURFACE_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
+import static pl.marconzet.engine.VKUtil.ioResourceToByteBuffer;
 import static pl.marconzet.engine.VKUtil.translateVulkanResult;
 
 
@@ -81,6 +84,45 @@ public class HelloTriangleApplication {
         swapChain = createSwapChain();
         swapChainImages = getSwapChainImages();
         swapChainImageViews = createImageViews();
+
+        createGraphicsPipeline();
+    }
+
+    private void createGraphicsPipeline() {
+        VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(2);
+        try {
+            shaderStages.get(0).set(loadShader(device, "vert.spv", VK_SHADER_STAGE_VERTEX_BIT));
+            shaderStages.get(1).set(loadShader(device, "frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+    }
+
+    private static long loadShader(String classPath, VkDevice device) throws IOException {
+        ByteBuffer shaderCode = ioResourceToByteBuffer(classPath, 1024);
+        int err;
+        VkShaderModuleCreateInfo moduleCreateInfo = VkShaderModuleCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO)
+                .pNext(NULL)
+                .pCode(shaderCode)
+                .flags(0);
+        LongBuffer pShaderModule = memAllocLong(1);
+        err = vkCreateShaderModule(device, moduleCreateInfo, null, pShaderModule);
+        long shaderModule = pShaderModule.get(0);
+        memFree(pShaderModule);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create shader module: " + translateVulkanResult(err));
+        }
+        return shaderModule;
+    }
+
+    private VkPipelineShaderStageCreateInfo loadShader(VkDevice device, String classPath, int stage) throws IOException {
+        return VkPipelineShaderStageCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
+                .stage(stage)
+                .module(loadShader(classPath, device))
+                .pName(memUTF8("main"));
     }
 
     private long[] createImageViews() {
