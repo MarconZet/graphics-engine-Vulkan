@@ -55,6 +55,7 @@ public class HelloTriangleApplication {
     private int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
     private long[] swapChainImageViews;
+    private long pipelineLayout;
 
 
     public void run(){
@@ -97,6 +98,100 @@ public class HelloTriangleApplication {
             throw new RuntimeException(e);
         }
 
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+                .pVertexBindingDescriptions(null)
+                .pVertexAttributeDescriptions(null);
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
+                .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .primitiveRestartEnable(false);
+
+        VkViewport.Buffer viewport = VkViewport.calloc(1)
+                .x(0.0f)
+                .y(0.0f)
+                .width((float) swapChainExtent.width())
+                .height((float) swapChainExtent.height())
+                .minDepth(0.0f)
+                .maxDepth(1.0f);
+
+        VkOffset2D offset = VkOffset2D.calloc()
+                .set(0,0);
+
+        VkRect2D.Buffer scissor = VkRect2D.calloc(1)
+                .offset(offset)
+                .extent(swapChainExtent);
+
+        VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
+                .viewportCount(1)
+                .pViewports(viewport)
+                .scissorCount(1)
+                .pScissors(scissor);
+
+        VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
+                .depthClampEnable(false)
+                .rasterizerDiscardEnable(false)
+                .polygonMode(VK_POLYGON_MODE_FILL)
+                .lineWidth(1.0f)
+                .cullMode(VK_CULL_MODE_BACK_BIT)
+                .frontFace(VK_FRONT_FACE_CLOCKWISE)
+                .depthBiasEnable(false)
+                .depthBiasConstantFactor(0.0f)
+                .depthBiasClamp(0.0f)
+                .depthBiasSlopeFactor(0.0f);
+
+        VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
+                .sampleShadingEnable(false)
+                .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
+                .minSampleShading(1.0f)
+                .pSampleMask(null)
+                .alphaToCoverageEnable(false)
+                .alphaToOneEnable(false);
+
+        VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1)
+                .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                .blendEnable(false)
+                .srcColorBlendFactor(VK_BLEND_FACTOR_ONE)
+                .dstColorBlendFactor(VK_BLEND_FACTOR_ZERO)
+                .colorBlendOp(VK_BLEND_OP_ADD)
+                .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE)
+                .dstAlphaBlendFactor(VK_BLEND_FACTOR_ZERO)
+                .alphaBlendOp(VK_BLEND_OP_ADD);
+
+        VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
+                .logicOpEnable(false)
+                .logicOp(VK_LOGIC_OP_COPY)
+                .pAttachments(colorBlendAttachment);
+        colorBlending.blendConstants().put(new float[]{0f,0f,0f,0f}).flip();
+
+        int dynamicStates[] = {
+                VK_DYNAMIC_STATE_VIEWPORT,
+                VK_DYNAMIC_STATE_LINE_WIDTH
+        };
+        IntBuffer pDynamicStates = BufferUtils.createIntBuffer(2).put(dynamicStates);
+        pDynamicStates.flip();
+        VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
+                .pDynamicStates(pDynamicStates);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+                .pSetLayouts(null)
+                .pPushConstantRanges(null);
+
+
+
+        LongBuffer pPipelineLayout = BufferUtils.createLongBuffer(1);
+        int err = vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pPipelineLayout);
+        pipelineLayout = pPipelineLayout.get(0);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create pipeline layout: " + translateVulkanResult(err));
+        }
     }
 
     private static long loadShader(String classPath, VkDevice device) throws IOException {
