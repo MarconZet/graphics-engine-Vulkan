@@ -55,6 +55,7 @@ public class HelloTriangleApplication {
     private int swapChainImageFormat;
     private VkExtent2D swapChainExtent;
     private long[] swapChainImageViews;
+    private long renderPass;
     private long pipelineLayout;
 
 
@@ -85,11 +86,45 @@ public class HelloTriangleApplication {
         swapChain = createSwapChain();
         swapChainImages = getSwapChainImages();
         swapChainImageViews = createImageViews();
-
-        createGraphicsPipeline();
+        renderPass = createRenderPass();
+        pipelineLayout = createGraphicsPipeline();
     }
 
-    private void createGraphicsPipeline() {
+    private long createRenderPass() {
+        VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.calloc(1)
+                .format(swapChainImageFormat)
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+                .storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+        VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.calloc(1)
+                .attachment(0)
+                .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1)
+                .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
+                .colorAttachmentCount(1)
+                .pColorAttachments(colorAttachmentRef);
+
+        VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
+                .pAttachments(colorAttachment)
+                .pSubpasses(subpass);
+
+        LongBuffer pRenderPass = BufferUtils.createLongBuffer(1);
+        int err = vkCreateRenderPass(device, renderPassInfo, null, pRenderPass);
+        long renderPass = pRenderPass.get(0);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create clear render pass: " + translateVulkanResult(err));
+        }
+        return renderPass;
+    }
+
+    private long createGraphicsPipeline() {
         VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(2);
         try {
             shaderStages.get(0).set(loadShader(device, "vert.spv", VK_SHADER_STAGE_VERTEX_BIT));
@@ -184,14 +219,13 @@ public class HelloTriangleApplication {
                 .pSetLayouts(null)
                 .pPushConstantRanges(null);
 
-
-
         LongBuffer pPipelineLayout = BufferUtils.createLongBuffer(1);
         int err = vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pPipelineLayout);
-        pipelineLayout = pPipelineLayout.get(0);
+        long pipelineLayout = pPipelineLayout.get(0);
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create pipeline layout: " + translateVulkanResult(err));
         }
+        return pipelineLayout;
     }
 
     private static long loadShader(String classPath, VkDevice device) throws IOException {
@@ -567,6 +601,8 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        vkDestroyPipelineLayout(device, pipelineLayout, null);
+        vkDestroyRenderPass(device, renderPass, null);
         for (long imageView : swapChainImageViews) {
             vkDestroyImageView(device, imageView, null);
         }
