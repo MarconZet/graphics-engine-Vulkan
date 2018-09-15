@@ -57,6 +57,7 @@ public class HelloTriangleApplication {
     private long[] swapChainImageViews;
     private long renderPass;
     private long pipelineLayout;
+    private long graphicsPipeline;
 
 
     public void run(){
@@ -87,7 +88,7 @@ public class HelloTriangleApplication {
         swapChainImages = getSwapChainImages();
         swapChainImageViews = createImageViews();
         renderPass = createRenderPass();
-        pipelineLayout = createGraphicsPipeline();
+        graphicsPipeline = createGraphicsPipeline();
     }
 
     private long createRenderPass() {
@@ -221,11 +222,35 @@ public class HelloTriangleApplication {
 
         LongBuffer pPipelineLayout = BufferUtils.createLongBuffer(1);
         int err = vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pPipelineLayout);
-        long pipelineLayout = pPipelineLayout.get(0);
+        pipelineLayout = pPipelineLayout.get(0);
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create pipeline layout: " + translateVulkanResult(err));
         }
-        return pipelineLayout;
+
+        VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1)
+                .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
+                .pStages(shaderStages)
+                .pVertexInputState(vertexInputInfo)
+                .pInputAssemblyState(inputAssembly)
+                .pViewportState(viewportState)
+                .pRasterizationState(rasterizer)
+                .pMultisampleState(multisampling)
+                .pDepthStencilState(null)
+                .pColorBlendState(colorBlending)
+                .pDynamicState(null)
+                .layout(pipelineLayout)
+                .renderPass(renderPass)
+                .subpass(0)
+                .basePipelineHandle(VK_NULL_HANDLE)
+                .basePipelineIndex(-1);
+
+        LongBuffer pPipeline = BufferUtils.createLongBuffer(1);
+        err = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, pipelineInfo, null, pPipeline);
+        long pipeline = pPipeline.get(0);
+        if (err != VK_SUCCESS) {
+            throw new AssertionError("Failed to create pipeline: " + translateVulkanResult(err));
+        }
+        return pipeline;
     }
 
     private static long loadShader(String classPath, VkDevice device) throws IOException {
@@ -601,6 +626,7 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        vkDestroyPipeline(device, graphicsPipeline, null);
         vkDestroyPipelineLayout(device, pipelineLayout, null);
         vkDestroyRenderPass(device, renderPass, null);
         for (long imageView : swapChainImageViews) {
