@@ -5,10 +5,7 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
-import java.nio.LongBuffer;
+import java.nio.*;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
@@ -59,7 +56,8 @@ public class HelloTriangleApplication {
     private long pipelineLayout;
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
-
+    private long commandPool;
+    private VkCommandBuffer[] commandBuffers;
 
     public void run(){
         initWindow();
@@ -91,6 +89,87 @@ public class HelloTriangleApplication {
         renderPass = createRenderPass();
         graphicsPipeline = createGraphicsPipeline();
         swapChainFramebuffers = createFramebuffers();
+        commandPool = createCommandPoll();
+        commandBuffers = createCommandBuffers();
+    }
+
+    private VkCommandBuffer[] createCommandBuffers() {
+        VkCommandBuffer[] commandBuffers = new VkCommandBuffer[swapChainFramebuffers.length];
+        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+                .commandPool(commandPool)
+                .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+                .commandBufferCount(commandBuffers.length);
+
+        PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(commandBuffers.length);
+        int err = vkAllocateCommandBuffers(device, allocateInfo, pointerBuffer);
+        if (err != VK_SUCCESS) {
+            throw new RuntimeException("Failed to allocate command buffers: " + translateVulkanResult(err));
+        }
+
+        for (int i = 0; i < commandBuffers.length; i++) {
+            long l = pointerBuffer.get();
+            commandBuffers[i] = new VkCommandBuffer(l, device);
+        }
+
+        for (int i = 0; i < commandBuffers.length; i++) {
+            VkCommandBufferBeginInfo bufferBeginInfo = VkCommandBufferBeginInfo.calloc()
+                    .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+                    .flags(VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT)
+                    .pInheritanceInfo(null);
+
+            err = vkBeginCommandBuffer(commandBuffers[i], bufferBeginInfo);
+            if (err != VK_SUCCESS) {
+                throw new RuntimeException("Failed to begin recording command buffer: " + translateVulkanResult(err));
+            }
+
+            VkClearValue.Buffer clearValues = VkClearValue.calloc(1);
+            clearValues.color()
+                    .float32(0, 100/255.0f)
+                    .float32(1, 149/255.0f)
+                    .float32(2, 237/255.0f)
+                    .float32(3, 1.0f);
+
+            VkRenderPassBeginInfo renderPassBeginInfo = VkRenderPassBeginInfo.calloc()
+                    .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
+                    .renderPass(renderPass)
+                    .framebuffer(swapChainFramebuffers[i])
+                    .pClearValues(clearValues);
+            renderPassBeginInfo.renderArea()
+                    .offset(VkOffset2D.calloc().set(0, 0))
+                    .extent(swapChainExtent);
+
+            vkCmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+            vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+
+            vkCmdEndRenderPass(commandBuffers[i]);
+
+            err = vkEndCommandBuffer(commandBuffers[i]);
+            if (err != VK_SUCCESS) {
+                throw new RuntimeException("Failed to record command buffer: " + translateVulkanResult(err));
+            }
+
+        }
+
+        return commandBuffers;
+    }
+
+    private long createCommandPoll() {
+        VkCommandPoolCreateInfo createInfo = VkCommandPoolCreateInfo.calloc()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
+                .queueFamilyIndex(indices.getGraphicsFamily())
+                .flags(0);
+
+
+        LongBuffer pCommandPoll = BufferUtils.createLongBuffer(1);
+        int err = vkCreateCommandPool(device, createInfo, null, pCommandPoll);
+        if (err != VK_SUCCESS) {
+            throw new RuntimeException("Failed to create command pool:" + translateVulkanResult(err));
+        }
+        return pCommandPoll.get();
     }
 
     private long[] createFramebuffers() {
@@ -647,6 +726,7 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        vkDestroyCommandPool(device, commandPool, null);
         for (long framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, null);
         }
