@@ -58,6 +58,7 @@ public class HelloTriangleApplication {
     private long renderPass;
     private long pipelineLayout;
     private long graphicsPipeline;
+    private long[] swapChainFramebuffers;
 
 
     public void run(){
@@ -89,6 +90,31 @@ public class HelloTriangleApplication {
         swapChainImageViews = createImageViews();
         renderPass = createRenderPass();
         graphicsPipeline = createGraphicsPipeline();
+        swapChainFramebuffers = createFramebuffers();
+    }
+
+    private long[] createFramebuffers() {
+        long[] framebuffers = new long[swapChainImageViews.length];
+        for (int i = 0; i < swapChainImageViews.length; i++) {
+            LongBuffer attachments = BufferUtils.createLongBuffer(1).put(swapChainImageViews[i]);
+            attachments.flip();
+
+            VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc()
+                    .sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO)
+                    .renderPass(renderPass)
+                    .pAttachments(attachments)
+                    .width(swapChainExtent.width())
+                    .height(swapChainExtent.height())
+                    .layers(1);
+
+            LongBuffer pFramebuffer = BufferUtils.createLongBuffer(1);
+            int err = vkCreateFramebuffer(device, framebufferInfo, null, pFramebuffer);
+            if (err !=VK_SUCCESS){
+                throw new RuntimeException("Failed to create framebuffer: " + translateVulkanResult(err));
+            }
+            framebuffers[i] = pFramebuffer.get(0);
+        }
+        return framebuffers;
     }
 
     private long createRenderPass() {
@@ -599,11 +625,6 @@ public class HelloTriangleApplication {
 
         VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.calloc(layerCount);
         vkEnumerateInstanceLayerProperties(pLayerCount, pAvailableLayers);
-        /*System.out.println("Available layers:");
-        while (pAvailableLayers.hasRemaining()) {
-            System.out.println(pAvailableLayers.get().layerNameString());
-        }
-        pAvailableLayers.rewind();*/
         for (String validationLayer : VALIDATION_LAYERS) {
             boolean found = false;
             while(pAvailableLayers.hasRemaining()) {
@@ -626,6 +647,9 @@ public class HelloTriangleApplication {
     }
 
     private void cleanup() {
+        for (long framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, null);
+        }
         vkDestroyPipeline(device, graphicsPipeline, null);
         vkDestroyPipelineLayout(device, pipelineLayout, null);
         vkDestroyRenderPass(device, renderPass, null);
