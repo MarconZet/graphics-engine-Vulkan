@@ -58,6 +58,9 @@ public class HelloTriangleApplication {
     private long[] swapChainFramebuffers;
     private long commandPool;
     private VkCommandBuffer[] commandBuffers;
+    private long imageAvailableSemaphore;
+    private long renderFinishedSemaphore;
+
 
     public void run(){
         initWindow();
@@ -91,11 +94,26 @@ public class HelloTriangleApplication {
         swapChainFramebuffers = createFramebuffers();
         commandPool = createCommandPoll();
         commandBuffers = createCommandBuffers();
+        imageAvailableSemaphore = createSemaphore();
+        renderFinishedSemaphore = createSemaphore();
+    }
+
+    private long createSemaphore() {
+        VkSemaphoreCreateInfo createInfo = VkSemaphoreCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+        LongBuffer pSemaphore = BufferUtils.createLongBuffer(1);
+        int err = vkCreateSemaphore(device, createInfo, null, pSemaphore);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create semaphore: " + translateVulkanResult(err));
+        }
+
+        return pSemaphore.get();
     }
 
     private VkCommandBuffer[] createCommandBuffers() {
         VkCommandBuffer[] commandBuffers = new VkCommandBuffer[swapChainFramebuffers.length];
-        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.calloc()
+        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
                 .commandPool(commandPool)
                 .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
@@ -113,7 +131,7 @@ public class HelloTriangleApplication {
         }
 
         for (int i = 0; i < commandBuffers.length; i++) {
-            VkCommandBufferBeginInfo bufferBeginInfo = VkCommandBufferBeginInfo.calloc()
+            VkCommandBufferBeginInfo bufferBeginInfo = VkCommandBufferBeginInfo.create()
                     .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
                     .flags(VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT)
                     .pInheritanceInfo(null);
@@ -123,20 +141,20 @@ public class HelloTriangleApplication {
                 throw new RuntimeException("Failed to begin recording command buffer: " + translateVulkanResult(err));
             }
 
-            VkClearValue.Buffer clearValues = VkClearValue.calloc(1);
+            VkClearValue.Buffer clearValues = VkClearValue.create(1);
             clearValues.color()
                     .float32(0, 100/255.0f)
                     .float32(1, 149/255.0f)
                     .float32(2, 237/255.0f)
                     .float32(3, 1.0f);
 
-            VkRenderPassBeginInfo renderPassBeginInfo = VkRenderPassBeginInfo.calloc()
+            VkRenderPassBeginInfo renderPassBeginInfo = VkRenderPassBeginInfo.create()
                     .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
                     .renderPass(renderPass)
                     .framebuffer(swapChainFramebuffers[i])
                     .pClearValues(clearValues);
             renderPassBeginInfo.renderArea()
-                    .offset(VkOffset2D.calloc().set(0, 0))
+                    .offset(VkOffset2D.create().set(0, 0))
                     .extent(swapChainExtent);
 
             vkCmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -158,7 +176,7 @@ public class HelloTriangleApplication {
     }
 
     private long createCommandPoll() {
-        VkCommandPoolCreateInfo createInfo = VkCommandPoolCreateInfo.calloc()
+        VkCommandPoolCreateInfo createInfo = VkCommandPoolCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
                 .queueFamilyIndex(indices.getGraphicsFamily())
                 .flags(0);
@@ -178,7 +196,7 @@ public class HelloTriangleApplication {
             LongBuffer attachments = BufferUtils.createLongBuffer(1).put(swapChainImageViews[i]);
             attachments.flip();
 
-            VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc()
+            VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.create()
                     .sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO)
                     .renderPass(renderPass)
                     .pAttachments(attachments)
@@ -197,7 +215,7 @@ public class HelloTriangleApplication {
     }
 
     private long createRenderPass() {
-        VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.calloc(1)
+        VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.create(1)
                 .format(swapChainImageFormat)
                 .samples(VK_SAMPLE_COUNT_1_BIT)
                 .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
@@ -207,19 +225,27 @@ public class HelloTriangleApplication {
                 .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
                 .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-        VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.calloc(1)
+        VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.create(1)
                 .attachment(0)
                 .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1)
+        VkSubpassDescription.Buffer subpass = VkSubpassDescription.create(1)
                 .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
                 .colorAttachmentCount(1)
                 .pColorAttachments(colorAttachmentRef);
 
-        VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.calloc()
+        VkSubpassDependency.Buffer dependency = VkSubpassDependency.create(1)
+                .srcSubpass(VK_SUBPASS_EXTERNAL)
+                .dstSubpass(0)
+                .srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+                .srcAccessMask(0)
+                .dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+                .dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+        VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
                 .pAttachments(colorAttachment)
-                .pSubpasses(subpass);
+                .pSubpasses(subpass).pDependencies(dependency);
 
         LongBuffer pRenderPass = BufferUtils.createLongBuffer(1);
         int err = vkCreateRenderPass(device, renderPassInfo, null, pRenderPass);
@@ -231,7 +257,7 @@ public class HelloTriangleApplication {
     }
 
     private long createGraphicsPipeline() {
-        VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(2);
+        VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.create(2);
         try {
             shaderStages.get(0).set(loadShader(device, "vert.spv", VK_SHADER_STAGE_VERTEX_BIT));
             shaderStages.get(1).set(loadShader(device, "frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT));
@@ -239,17 +265,17 @@ public class HelloTriangleApplication {
             throw new RuntimeException(e);
         }
 
-        VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc()
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
                 .pVertexBindingDescriptions(null)
                 .pVertexAttributeDescriptions(null);
 
-        VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc()
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
                 .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
                 .primitiveRestartEnable(false);
 
-        VkViewport.Buffer viewport = VkViewport.calloc(1)
+        VkViewport.Buffer viewport = VkViewport.create(1)
                 .x(0.0f)
                 .y(0.0f)
                 .width((float) swapChainExtent.width())
@@ -257,21 +283,21 @@ public class HelloTriangleApplication {
                 .minDepth(0.0f)
                 .maxDepth(1.0f);
 
-        VkOffset2D offset = VkOffset2D.calloc()
+        VkOffset2D offset = VkOffset2D.create()
                 .set(0,0);
 
-        VkRect2D.Buffer scissor = VkRect2D.calloc(1)
+        VkRect2D.Buffer scissor = VkRect2D.create(1)
                 .offset(offset)
                 .extent(swapChainExtent);
 
-        VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc()
+        VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
                 .viewportCount(1)
                 .pViewports(viewport)
                 .scissorCount(1)
                 .pScissors(scissor);
 
-        VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc()
+        VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
                 .depthClampEnable(false)
                 .rasterizerDiscardEnable(false)
@@ -284,7 +310,7 @@ public class HelloTriangleApplication {
                 .depthBiasClamp(0.0f)
                 .depthBiasSlopeFactor(0.0f);
 
-        VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.calloc()
+        VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
                 .sampleShadingEnable(false)
                 .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
@@ -293,7 +319,7 @@ public class HelloTriangleApplication {
                 .alphaToCoverageEnable(false)
                 .alphaToOneEnable(false);
 
-        VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1)
+        VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.create(1)
                 .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
                 .blendEnable(false)
                 .srcColorBlendFactor(VK_BLEND_FACTOR_ONE)
@@ -303,7 +329,7 @@ public class HelloTriangleApplication {
                 .dstAlphaBlendFactor(VK_BLEND_FACTOR_ZERO)
                 .alphaBlendOp(VK_BLEND_OP_ADD);
 
-        VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc()
+        VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
                 .logicOpEnable(false)
                 .logicOp(VK_LOGIC_OP_COPY)
@@ -316,11 +342,11 @@ public class HelloTriangleApplication {
         };
         IntBuffer pDynamicStates = BufferUtils.createIntBuffer(2).put(dynamicStates);
         pDynamicStates.flip();
-        VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.calloc()
+        VkPipelineDynamicStateCreateInfo dynamicState = VkPipelineDynamicStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
                 .pDynamicStates(pDynamicStates);
 
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc()
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
                 .pSetLayouts(null)
                 .pPushConstantRanges(null);
@@ -332,7 +358,7 @@ public class HelloTriangleApplication {
             throw new AssertionError("Failed to create pipeline layout: " + translateVulkanResult(err));
         }
 
-        VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1)
+        VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.create(1)
                 .sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
                 .pStages(shaderStages)
                 .pVertexInputState(vertexInputInfo)
@@ -361,7 +387,7 @@ public class HelloTriangleApplication {
     private static long loadShader(String classPath, VkDevice device) throws IOException {
         ByteBuffer shaderCode = ioResourceToByteBuffer(classPath, 1024);
         int err;
-        VkShaderModuleCreateInfo moduleCreateInfo = VkShaderModuleCreateInfo.calloc()
+        VkShaderModuleCreateInfo moduleCreateInfo = VkShaderModuleCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO)
                 .pNext(NULL)
                 .pCode(shaderCode)
@@ -377,7 +403,7 @@ public class HelloTriangleApplication {
     }
 
     private VkPipelineShaderStageCreateInfo loadShader(VkDevice device, String classPath, int stage) throws IOException {
-        return VkPipelineShaderStageCreateInfo.calloc()
+        return VkPipelineShaderStageCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
                 .stage(stage)
                 .module(loadShader(classPath, device))
@@ -387,7 +413,7 @@ public class HelloTriangleApplication {
     private long[] createImageViews() {
         long[] imageViews = new long[swapChainImages.length];
         for (int i = 0; i < imageViews.length; i++) {
-            VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.calloc()
+            VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.create()
                     .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
                     .image(swapChainImages[i])
                     .viewType(VK_IMAGE_VIEW_TYPE_2D)
@@ -426,7 +452,7 @@ public class HelloTriangleApplication {
             imageCount = Math.min(imageCount, swapChainSupport.getCapabilities().maxImageCount());
         }
 
-        VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc()
+        VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.create()
                 .sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR)
                 .surface(surface)
                 .minImageCount(imageCount)
@@ -496,13 +522,13 @@ public class HelloTriangleApplication {
     private VkDevice createLogicalDevice() {
         FloatBuffer pQueuePriorities = BufferUtils.createFloatBuffer(1).put(1.0f);
         pQueuePriorities.flip();
-        VkDeviceQueueCreateInfo.Buffer pQueueCreateInfo = VkDeviceQueueCreateInfo.calloc(2).put(
-                VkDeviceQueueCreateInfo.calloc()
+        VkDeviceQueueCreateInfo.Buffer pQueueCreateInfo = VkDeviceQueueCreateInfo.create(2).put(
+                VkDeviceQueueCreateInfo.create()
                         .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
                         .queueFamilyIndex(indices.getGraphicsFamily())
                         .pQueuePriorities(pQueuePriorities)
         ).put(
-                VkDeviceQueueCreateInfo.calloc()
+                VkDeviceQueueCreateInfo.create()
                         .sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
                         .queueFamilyIndex(indices.getPresentFamily())
                         .pQueuePriorities(pQueuePriorities)
@@ -515,8 +541,8 @@ public class HelloTriangleApplication {
         }
         ppExtensionNames.flip();
 
-        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
-        VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.calloc()
+        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.create();
+        VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
                 .pNext(NULL)
                 .pQueueCreateInfos(pQueueCreateInfo)
@@ -559,8 +585,8 @@ public class HelloTriangleApplication {
     }
 
     private boolean isDeviceSuitable(VkPhysicalDevice physicalDevice) {
-        VkPhysicalDeviceProperties deviceProperties = VkPhysicalDeviceProperties.calloc();
-        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc();
+        VkPhysicalDeviceProperties deviceProperties = VkPhysicalDeviceProperties.create();
+        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.create();
         vkGetPhysicalDeviceProperties(physicalDevice, deviceProperties);
         vkGetPhysicalDeviceFeatures(physicalDevice, deviceFeatures);
 
@@ -582,7 +608,7 @@ public class HelloTriangleApplication {
         IntBuffer pExtensionCount = BufferUtils.createIntBuffer(1);
         vkEnumerateDeviceExtensionProperties(device, (CharSequence) null, pExtensionCount, null);
         int extensionCount = pExtensionCount.get(0);
-        VkExtensionProperties.Buffer pAvailableExtensions = VkExtensionProperties.calloc(extensionCount);
+        VkExtensionProperties.Buffer pAvailableExtensions = VkExtensionProperties.create(extensionCount);
         vkEnumerateDeviceExtensionProperties(device, (CharSequence) null, pExtensionCount, pAvailableExtensions);
 
 
@@ -611,17 +637,15 @@ public class HelloTriangleApplication {
     }
 
     private long setupDebugging(VkInstance instance, int flags, VkDebugReportCallbackEXT callback) {
-        VkDebugReportCallbackCreateInfoEXT dbgCreateInfo = VkDebugReportCallbackCreateInfoEXT.calloc()
+        VkDebugReportCallbackCreateInfoEXT dbgCreateInfo = VkDebugReportCallbackCreateInfoEXT.create()
                 .sType(VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT)
                 .pNext(NULL)
                 .pfnCallback(callback)
                 .pUserData(NULL)
                 .flags(flags);
-        LongBuffer pCallback = memAllocLong(1);
+        LongBuffer pCallback = BufferUtils.createLongBuffer(1);
         int err = vkCreateDebugReportCallbackEXT(instance, dbgCreateInfo, null, pCallback);
         long callbackHandle = pCallback.get(0);
-        memFree(pCallback);
-        dbgCreateInfo.free();
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create VkInstance: " + translateVulkanResult(err));
         }
@@ -633,7 +657,7 @@ public class HelloTriangleApplication {
             throw new RuntimeException("validation layers requested, but not available!");
         }
 
-        VkApplicationInfo appInfo = VkApplicationInfo.calloc()
+        VkApplicationInfo appInfo = VkApplicationInfo.create()
                 .sType(VK_STRUCTURE_TYPE_APPLICATION_INFO)
                 .pApplicationName(memUTF8("Hello Triangle"))
                 .applicationVersion(VK_MAKE_VERSION(1, 0, 0))
@@ -642,7 +666,7 @@ public class HelloTriangleApplication {
                 .apiVersion(VK_API_VERSION_1_0);
 
         PointerBuffer ppEnabledExtensionNames = getInstanceExtensions();
-        VkInstanceCreateInfo pCreateInfo = VkInstanceCreateInfo.calloc()
+        VkInstanceCreateInfo pCreateInfo = VkInstanceCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
                 .pApplicationInfo(appInfo)
                 .ppEnabledExtensionNames(ppEnabledExtensionNames);
@@ -669,7 +693,7 @@ public class HelloTriangleApplication {
         IntBuffer pExtensionCount = BufferUtils.createIntBuffer(1);
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, null);
         int extensionCount = pExtensionCount.get(0);
-        VkExtensionProperties.Buffer ppExtensions = VkExtensionProperties.calloc(extensionCount);
+        VkExtensionProperties.Buffer ppExtensions = VkExtensionProperties.create(extensionCount);
         vkEnumerateInstanceExtensionProperties((CharSequence) null, pExtensionCount, ppExtensions);
 
         PointerBuffer ppRequiredExtensions = glfwGetRequiredInstanceExtensions();
@@ -702,8 +726,13 @@ public class HelloTriangleApplication {
         vkEnumerateInstanceLayerProperties(pLayerCount, null);
         int layerCount = pLayerCount.get(0);
 
-        VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.calloc(layerCount);
+        VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.create(layerCount);
         vkEnumerateInstanceLayerProperties(pLayerCount, pAvailableLayers);
+        while(pAvailableLayers.hasRemaining()){
+            System.out.println(pAvailableLayers.get().layerNameString());
+        }
+        pAvailableLayers.rewind();
+
         for (String validationLayer : VALIDATION_LAYERS) {
             boolean found = false;
             while(pAvailableLayers.hasRemaining()) {
@@ -722,10 +751,49 @@ public class HelloTriangleApplication {
     private void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+            drawFrame();
         }
+
+        vkDeviceWaitIdle(device);
+    }
+
+    private void drawFrame() {
+        IntBuffer pImageIndex = BufferUtils.createIntBuffer(1);
+        vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
+        int imageIndex = pImageIndex.get(0);
+
+        LongBuffer waitSemaphores = BufferUtils.createLongBuffer(1).put(0, imageAvailableSemaphore);
+        LongBuffer signalSemaphores = BufferUtils.createLongBuffer(1).put(0, renderFinishedSemaphore);
+        IntBuffer waitStages = BufferUtils.createIntBuffer(1).put(0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkSubmitInfo submitInfo = VkSubmitInfo.create()
+                .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+                .waitSemaphoreCount(1)
+                .pWaitSemaphores(waitSemaphores)
+                .pWaitDstStageMask(waitStages)
+                .pCommandBuffers(BufferUtils.createPointerBuffer(1).put(0, commandBuffers[imageIndex]))
+                .pSignalSemaphores(signalSemaphores);
+
+        int err = vkQueueSubmit(graphicsQueue, submitInfo, VK_NULL_HANDLE);
+        if (err != VK_SUCCESS) {
+            throw new RuntimeException("Failed to submit draw command buffer: " + translateVulkanResult(err));
+        }
+
+        VkPresentInfoKHR presentInfo = VkPresentInfoKHR.create()
+                .sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR)
+                .pWaitSemaphores(signalSemaphores)
+                .swapchainCount(1)
+                .pSwapchains(BufferUtils.createLongBuffer(1).put(0, swapChain))
+                .pImageIndices(pImageIndex);
+
+        err = vkQueuePresentKHR(presentQueue, presentInfo);
+
+        vkQueueWaitIdle(presentQueue);
+
     }
 
     private void cleanup() {
+        vkDestroySemaphore(device, renderFinishedSemaphore, null);
+        vkDestroySemaphore(device, imageAvailableSemaphore, null);
         vkDestroyCommandPool(device, commandPool, null);
         for (long framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, null);
