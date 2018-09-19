@@ -28,7 +28,7 @@ import static pl.marconzet.engine.VKUtil.translateVulkanResult;
  */
 public class HelloTriangleApplication {
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
-    private static final String[] VALIDATION_LAYERS = {"VK_LAYER_LUNARG_standard_validation"};
+    private static final String[] VALIDATION_LAYERS = {"VK_LAYER_LUNARG_standard_validation", "VK_LAYER_RENDERDOC_Capture"};
     private static final String[] VALIDATION_LAYERS_INSTANCE_EXTENSIONS = {VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
     private static final String[] INSTANCE_EXTENSIONS = {VK_KHR_SURFACE_EXTENSION_NAME};
     private static final String[] DEVICE_EXTENSIONS = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
@@ -36,6 +36,8 @@ public class HelloTriangleApplication {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 600;
 
+    private static final int MAX_FRAMES_IN_FLIGHT = 2;
+    private int currentFrame = 0;
 
     private long window;
     private VkInstance instance;
@@ -58,8 +60,9 @@ public class HelloTriangleApplication {
     private long[] swapChainFramebuffers;
     private long commandPool;
     private VkCommandBuffer[] commandBuffers;
-    private long imageAvailableSemaphore;
-    private long renderFinishedSemaphore;
+    private long[] imageAvailableSemaphore;
+    private long[] renderFinishedSemaphore;
+    private long[] inFlightFences;
 
 
     public void run(){
@@ -94,21 +97,40 @@ public class HelloTriangleApplication {
         swapChainFramebuffers = createFramebuffers();
         commandPool = createCommandPoll();
         commandBuffers = createCommandBuffers();
-        imageAvailableSemaphore = createSemaphore();
-        renderFinishedSemaphore = createSemaphore();
+        createSyncObjects();
     }
 
-    private long createSemaphore() {
-        VkSemaphoreCreateInfo createInfo = VkSemaphoreCreateInfo.create()
+    private void createSyncObjects() {
+        imageAvailableSemaphore = new long[MAX_FRAMES_IN_FLIGHT];
+        renderFinishedSemaphore = new long[MAX_FRAMES_IN_FLIGHT];
+        inFlightFences = new long[MAX_FRAMES_IN_FLIGHT];
+        VkSemaphoreCreateInfo semaphoreCreateInfo = VkSemaphoreCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
 
-        LongBuffer pSemaphore = BufferUtils.createLongBuffer(1);
-        int err = vkCreateSemaphore(device, createInfo, null, pSemaphore);
-        if(err != VK_SUCCESS){
-            throw new RuntimeException("Failed to create semaphore: " + translateVulkanResult(err));
+        VkFenceCreateInfo fenceCreateInfo = VkFenceCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
+                .flags(VK_FENCE_CREATE_SIGNALED_BIT);
+
+        LongBuffer pointer = BufferUtils.createLongBuffer(1);
+        int err;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            err = vkCreateSemaphore(device, semaphoreCreateInfo, null, pointer);
+            if (err != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create semaphore: " + translateVulkanResult(err));
+            }
+            imageAvailableSemaphore[i] = pointer.get(0);
+            err = vkCreateSemaphore(device, semaphoreCreateInfo, null, pointer);
+            if (err != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create semaphore: " + translateVulkanResult(err));
+            }
+            renderFinishedSemaphore[i] = pointer.get(0);
+            err = vkCreateFence(device, fenceCreateInfo, null, pointer);
+            if (err != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create fence: " + translateVulkanResult(err));
+            }
+            inFlightFences[i] = pointer.get(0);
         }
 
-        return pSemaphore.get();
     }
 
     private VkCommandBuffer[] createCommandBuffers() {
@@ -758,12 +780,15 @@ public class HelloTriangleApplication {
     }
 
     private void drawFrame() {
-        IntBuffer pImageIndex = BufferUtils.createIntBuffer(1);
-        vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
-        int imageIndex = pImageIndex.get(0);
+        vkWaitForFences(device, inFlightFences[currentFrame], true, Long.MAX_VALUE);
+        vkResetFences(device, inFlightFences[currentFrame]);
 
-        LongBuffer waitSemaphores = BufferUtils.createLongBuffer(1).put(0, imageAvailableSemaphore);
-        LongBuffer signalSemaphores = BufferUtils.createLongBuffer(1).put(0, renderFinishedSemaphore);
+        IntBuffer pointer = BufferUtils.createIntBuffer(1);
+        vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pointer);
+        int imageIndex = pointer.get(0);
+
+        LongBuffer waitSemaphores = BufferUtils.createLongBuffer(1).put(0, imageAvailableSemaphore[currentFrame]);
+        LongBuffer signalSemaphores = BufferUtils.createLongBuffer(1).put(0, renderFinishedSemaphore[currentFrame]);
         IntBuffer waitStages = BufferUtils.createIntBuffer(1).put(0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
         VkSubmitInfo submitInfo = VkSubmitInfo.create()
                 .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
@@ -773,7 +798,7 @@ public class HelloTriangleApplication {
                 .pCommandBuffers(BufferUtils.createPointerBuffer(1).put(0, commandBuffers[imageIndex]))
                 .pSignalSemaphores(signalSemaphores);
 
-        int err = vkQueueSubmit(graphicsQueue, submitInfo, VK_NULL_HANDLE);
+        int err = vkQueueSubmit(graphicsQueue, submitInfo, inFlightFences[currentFrame]);
         if (err != VK_SUCCESS) {
             throw new RuntimeException("Failed to submit draw command buffer: " + translateVulkanResult(err));
         }
@@ -783,17 +808,22 @@ public class HelloTriangleApplication {
                 .pWaitSemaphores(signalSemaphores)
                 .swapchainCount(1)
                 .pSwapchains(BufferUtils.createLongBuffer(1).put(0, swapChain))
-                .pImageIndices(pImageIndex);
+                .pImageIndices(pointer);
 
         err = vkQueuePresentKHR(presentQueue, presentInfo);
 
         vkQueueWaitIdle(presentQueue);
 
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+
     }
 
     private void cleanup() {
-        vkDestroySemaphore(device, renderFinishedSemaphore, null);
-        vkDestroySemaphore(device, imageAvailableSemaphore, null);
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vkDestroySemaphore(device, renderFinishedSemaphore[i], null);
+            vkDestroySemaphore(device, imageAvailableSemaphore[i], null);
+            vkDestroyFence(device, inFlightFences[i], null);
+        }
         vkDestroyCommandPool(device, commandPool, null);
         for (long framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, null);
