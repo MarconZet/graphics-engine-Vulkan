@@ -1,7 +1,5 @@
 package pl.marconzet.engine;
 
-import java.io.File;
-
 /**
  * @author MarconZet
  * Created 09.09.2018
@@ -18,7 +16,6 @@ public class Main {
             e.printStackTrace();
             System.exit(-1);
         }
-
         System.exit(0);
     }
 }

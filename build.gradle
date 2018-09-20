@@ -41,7 +41,7 @@ dependencies {
     compile "org.lwjgl:lwjgl-stb:$lwjglVersion:$lwjglNatives"
     compile "org.lwjgl:lwjgl-vma:$lwjglVersion:$lwjglNatives"
     compile "org.lwjgl:lwjgl-vulkan:$lwjglVersion:$lwjglNatives"
-    compile "org.joml:joml:${jomlVersion}"
+    compile "org.joml:joml:$jomlVersion"
 
     compile group: 'com.google.code.findbugs', name: 'jsr305', version: '3.0.2'
 

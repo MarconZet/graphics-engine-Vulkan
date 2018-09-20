@@ -36,6 +36,8 @@ public class HelloTriangleApplication {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 600;
 
+    private Vertices triangle = new Vertices();
+
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private int currentFrame = 0;
 
@@ -289,8 +291,8 @@ public class HelloTriangleApplication {
 
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
-                .pVertexBindingDescriptions(null)
-                .pVertexAttributeDescriptions(null);
+                .pVertexBindingDescriptions(triangle.getBindingDescription())
+                .pVertexAttributeDescriptions(triangle.getAttributeDescriptions());
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
