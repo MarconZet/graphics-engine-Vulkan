@@ -16,8 +16,8 @@ import static org.lwjgl.vulkan.VK10.*;
  */
 public class Vertices {
     public ByteBuffer data;
+    public int size = 3;
 
-    private int size = 3;
     private float[] pos = {0.0f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f};
     private int sizePos = 2;
     private float[] colour = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
@@ -34,9 +34,10 @@ public class Vertices {
     }
 
     VkVertexInputBindingDescription.Buffer getBindingDescription() {
-        VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.create(1)
+        VkVertexInputBindingDescription.Buffer bindingDescription = VkVertexInputBindingDescription.create(1);
+        bindingDescription.get(0)
                 .binding(0)
-                .stride(sizePos + sizeColour)
+                .stride((sizePos + sizeColour)*4)
                 .inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
         return bindingDescription;
     }

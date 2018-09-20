@@ -11,6 +11,7 @@ import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryUtil.*;
+import static org.lwjgl.system.libc.LibCString.memcpy;
 import static org.lwjgl.vulkan.EXTDebugReport.*;
 import static org.lwjgl.vulkan.EXTDebugReport.vkCreateDebugReportCallbackEXT;
 import static org.lwjgl.vulkan.KHRSurface.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -61,6 +62,8 @@ public class HelloTriangleApplication {
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
     private long commandPool;
+    private long vertexBuffer;
+    private long vertexBufferMemory;
     private VkCommandBuffer[] commandBuffers;
     private long[] imageAvailableSemaphore;
     private long[] renderFinishedSemaphore;
@@ -84,22 +87,84 @@ public class HelloTriangleApplication {
     }
 
     private void initVulkan() {
-        instance = createInstance();
-        debugCallbackHandle = setupDebugCallback();
-        surface = createSurface();
-        physicalDevice = pickPhysicalDevice();
-        device = createLogicalDevice();
+        createInstance();
+        setupDebugCallback();
+        createSurface();
+        pickPhysicalDevice();
+        createLogicalDevice();
+        createDeviceQueues();
+        createSwapChain();
+        getSwapChainImages();
+        createImageViews();
+        createRenderPass();
+        createGraphicsPipeline();
+        createFramebuffers();
+        createCommandPoll();
+        createVertexBuffer();
+        createCommandBuffers();
+        createSyncObjects();
+    }
+
+    private void createVertexBuffer() {
+        VkBufferCreateInfo bufferCreateInfo = VkBufferCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                .pNext(NULL)
+                .size(triangle.data.remaining())
+                .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+                .flags(0)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+        LongBuffer lPointer = BufferUtils.createLongBuffer(1);
+        int err = vkCreateBuffer(device, bufferCreateInfo, null, lPointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create vertex buffer: " + translateVulkanResult(err));
+        }
+        vertexBuffer = lPointer.get(0);
+
+        VkMemoryRequirements memoryRequirements = VkMemoryRequirements.create();
+        vkGetBufferMemoryRequirements(device, vertexBuffer, memoryRequirements);
+
+        VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                .pNext(NULL)
+                .allocationSize(memoryRequirements.size())
+                .memoryTypeIndex(
+                        findMemoryType(
+                                memoryRequirements.memoryTypeBits(),
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                        )
+                );
+
+        err = vkAllocateMemory(device, allocateInfo, null, lPointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to allocate vertex buffer memory: " + translateVulkanResult(err));
+        }
+        vertexBufferMemory = lPointer.get(0);
+
+        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
+        vkMapMemory(device, vertexBufferMemory, 0, bufferCreateInfo.size(), 0, pData);
+        long data = pData.get(0);
+        memCopy(memAddress(triangle.data), data, triangle.data.remaining());
+        vkUnmapMemory(device, vertexBufferMemory);
+    }
+
+    private int findMemoryType(int typeFilter, int properties){
+        VkPhysicalDeviceMemoryProperties memoryProperties = VkPhysicalDeviceMemoryProperties.create();
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, memoryProperties);
+        for (int i = 0; i < memoryProperties.memoryTypeCount(); i++) {
+            if((typeFilter & (1 << i)) > 0
+                    && (memoryProperties.memoryTypes(i).propertyFlags() & properties) == properties){
+                return i;
+            }
+        }
+        throw new RuntimeException("Failed to find suitable memory type");
+    }
+
+    private void createDeviceQueues() {
         graphicsQueue = createDeviceQueue(indices.getGraphicsFamily());
         presentQueue = createDeviceQueue(indices.getPresentFamily());
-        swapChain = createSwapChain();
-        swapChainImages = getSwapChainImages();
-        swapChainImageViews = createImageViews();
-        renderPass = createRenderPass();
-        graphicsPipeline = createGraphicsPipeline();
-        swapChainFramebuffers = createFramebuffers();
-        commandPool = createCommandPoll();
-        commandBuffers = createCommandBuffers();
-        createSyncObjects();
     }
 
     private void createSyncObjects() {
@@ -135,7 +200,7 @@ public class HelloTriangleApplication {
 
     }
 
-    private VkCommandBuffer[] createCommandBuffers() {
+    private void createCommandBuffers() {
         VkCommandBuffer[] commandBuffers = new VkCommandBuffer[swapChainFramebuffers.length];
         VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
@@ -185,7 +250,11 @@ public class HelloTriangleApplication {
 
             vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-            vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+            LongBuffer vertexBuffers = BufferUtils.createLongBuffer(1).put(0, vertexBuffer);
+            LongBuffer offsets = BufferUtils.createLongBuffer(1).put(0, 0);
+            vkCmdBindVertexBuffers(commandBuffers[i], 0, vertexBuffers, offsets);
+
+            vkCmdDraw(commandBuffers[i], triangle.size, 1, 0, 0);
 
             vkCmdEndRenderPass(commandBuffers[i]);
 
@@ -196,10 +265,10 @@ public class HelloTriangleApplication {
 
         }
 
-        return commandBuffers;
+        this.commandBuffers = commandBuffers;
     }
 
-    private long createCommandPoll() {
+    private void createCommandPoll() {
         VkCommandPoolCreateInfo createInfo = VkCommandPoolCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
                 .queueFamilyIndex(indices.getGraphicsFamily())
@@ -211,10 +280,10 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new RuntimeException("Failed to create command pool:" + translateVulkanResult(err));
         }
-        return pCommandPoll.get();
+        commandPool = pCommandPoll.get();
     }
 
-    private long[] createFramebuffers() {
+    private void createFramebuffers() {
         long[] framebuffers = new long[swapChainImageViews.length];
         for (int i = 0; i < swapChainImageViews.length; i++) {
             LongBuffer attachments = BufferUtils.createLongBuffer(1).put(swapChainImageViews[i]);
@@ -235,10 +304,10 @@ public class HelloTriangleApplication {
             }
             framebuffers[i] = pFramebuffer.get(0);
         }
-        return framebuffers;
+        swapChainFramebuffers = framebuffers;
     }
 
-    private long createRenderPass() {
+    private void createRenderPass() {
         VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.create(1)
                 .format(swapChainImageFormat)
                 .samples(VK_SAMPLE_COUNT_1_BIT)
@@ -277,10 +346,10 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create clear render pass: " + translateVulkanResult(err));
         }
-        return renderPass;
+        this.renderPass =  renderPass;
     }
 
-    private long createGraphicsPipeline() {
+    private void createGraphicsPipeline() {
         VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.create(2);
         try {
             shaderStages.get(0).set(loadShader(device, "vert.spv", VK_SHADER_STAGE_VERTEX_BIT));
@@ -291,11 +360,13 @@ public class HelloTriangleApplication {
 
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+                .pNext(NULL)
                 .pVertexBindingDescriptions(triangle.getBindingDescription())
                 .pVertexAttributeDescriptions(triangle.getAttributeDescriptions());
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
+                .pNext(NULL)
                 .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
                 .primitiveRestartEnable(false);
 
@@ -315,6 +386,7 @@ public class HelloTriangleApplication {
                 .extent(swapChainExtent);
 
         VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.create()
+                .pNext(NULL)
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
                 .viewportCount(1)
                 .pViewports(viewport)
@@ -322,6 +394,7 @@ public class HelloTriangleApplication {
                 .pScissors(scissor);
 
         VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.create()
+                .pNext(NULL)
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
                 .depthClampEnable(false)
                 .rasterizerDiscardEnable(false)
@@ -335,6 +408,7 @@ public class HelloTriangleApplication {
                 .depthBiasSlopeFactor(0.0f);
 
         VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.create()
+                .pNext(NULL)
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
                 .sampleShadingEnable(false)
                 .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
@@ -354,6 +428,7 @@ public class HelloTriangleApplication {
                 .alphaBlendOp(VK_BLEND_OP_ADD);
 
         VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.create()
+                .pNext(NULL)
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
                 .logicOpEnable(false)
                 .logicOp(VK_LOGIC_OP_COPY)
@@ -392,12 +467,12 @@ public class HelloTriangleApplication {
                 .pMultisampleState(multisampling)
                 .pDepthStencilState(null)
                 .pColorBlendState(colorBlending)
-                .pDynamicState(null)
+                .pDynamicState(dynamicState)
                 .layout(pipelineLayout)
                 .renderPass(renderPass)
                 .subpass(0)
                 .basePipelineHandle(VK_NULL_HANDLE)
-                .basePipelineIndex(-1);
+                .basePipelineIndex(0);
 
         LongBuffer pPipeline = BufferUtils.createLongBuffer(1);
         err = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, pipelineInfo, null, pPipeline);
@@ -405,7 +480,7 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create pipeline: " + translateVulkanResult(err));
         }
-        return pipeline;
+        graphicsPipeline = pipeline;
     }
 
     private static long loadShader(String classPath, VkDevice device) throws IOException {
@@ -434,7 +509,7 @@ public class HelloTriangleApplication {
                 .pName(memUTF8("main"));
     }
 
-    private long[] createImageViews() {
+    private void createImageViews() {
         long[] imageViews = new long[swapChainImages.length];
         for (int i = 0; i < imageViews.length; i++) {
             VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.create()
@@ -460,10 +535,10 @@ public class HelloTriangleApplication {
                 throw new AssertionError("Failed to create image view: " + translateVulkanResult(err));
             }
         }
-        return imageViews;
+        swapChainImageViews =  imageViews;
     }
 
-    private long createSwapChain() {
+    private void createSwapChain() {
         SwapChainSupportDetails swapChainSupport = new SwapChainSupportDetails(physicalDevice, surface);
 
         VkSurfaceFormatKHR surfaceFormat = swapChainSupport.chooseSwapSurfaceFormat();
@@ -515,26 +590,26 @@ public class HelloTriangleApplication {
 
 
 
-        return swapChain;
+        this.swapChain =  swapChain;
     }
 
-    private long[] getSwapChainImages() {
+    private void getSwapChainImages() {
         IntBuffer pImageCount = BufferUtils.createIntBuffer(1);
         vkGetSwapchainImagesKHR(device, swapChain, pImageCount, null);
         LongBuffer swapChainImages = BufferUtils.createLongBuffer(pImageCount.get(0));
         vkGetSwapchainImagesKHR(device, swapChain, pImageCount, swapChainImages);
         long[] res = new long[pImageCount.get(0)];
         swapChainImages.get(res);
-        return res;
+        this.swapChainImages =  res;
     }
 
-    private long createSurface() {
+    private void createSurface() {
         LongBuffer pSurface = memAllocLong(1);
         int err = glfwCreateWindowSurface(instance, window, null, pSurface);
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create surface: " + translateVulkanResult(err));
         }
-        return pSurface.get();
+        surface =  pSurface.get();
     }
 
     private VkQueue createDeviceQueue(int queueFamilyIndex) {
@@ -543,7 +618,7 @@ public class HelloTriangleApplication {
         return new VkQueue(pQueue.get(), device);
     }
 
-    private VkDevice createLogicalDevice() {
+    private void createLogicalDevice() {
         FloatBuffer pQueuePriorities = BufferUtils.createFloatBuffer(1).put(1.0f);
         pQueuePriorities.flip();
         VkDeviceQueueCreateInfo.Buffer pQueueCreateInfo = VkDeviceQueueCreateInfo.create(2).put(
@@ -585,10 +660,10 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create device: " + translateVulkanResult(err));
         }
-        return new VkDevice(pDevice.get(0), physicalDevice, pCreateInfo);
+        device = new VkDevice(pDevice.get(0), physicalDevice, pCreateInfo);
     }
 
-    private VkPhysicalDevice pickPhysicalDevice() {
+    private void pickPhysicalDevice() {
         IntBuffer pDeviceCount = BufferUtils.createIntBuffer(1);
         vkEnumeratePhysicalDevices(instance, pDeviceCount, null);
         int deviceCount = pDeviceCount.get(0);
@@ -601,8 +676,10 @@ public class HelloTriangleApplication {
         vkEnumeratePhysicalDevices(instance, pDeviceCount, pDevices);
         while(pDevices.hasRemaining()){
             VkPhysicalDevice physicalDevice = new VkPhysicalDevice(pDevices.get(), instance);
-            if(isDeviceSuitable(physicalDevice))
-                return physicalDevice;
+            if(isDeviceSuitable(physicalDevice)) {
+                this.physicalDevice =  physicalDevice;
+                return;
+            }
         }
 
         throw new RuntimeException("failed to find a suitable GPU!");
@@ -650,14 +727,14 @@ public class HelloTriangleApplication {
     }
 
 
-    private long setupDebugCallback() {
+    private void setupDebugCallback() {
         VkDebugReportCallbackEXT debugCallback = new VkDebugReportCallbackEXT() {
             public int invoke(int flags, int objectType, long object, long location, int messageCode, long pLayerPrefix, long pMessage, long pUserData) {
                 System.out.println("validation layer: " + VkDebugReportCallbackEXT.getString(pMessage));
                 return 0;
             }
         };
-        return setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT, debugCallback);
+        debugCallbackHandle =  setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT, debugCallback);
     }
 
     private long setupDebugging(VkInstance instance, int flags, VkDebugReportCallbackEXT callback) {
@@ -676,7 +753,7 @@ public class HelloTriangleApplication {
         return callbackHandle;
     }
 
-    private VkInstance createInstance() {
+    private void createInstance() {
         if (ENABLE_VALIDATION_LAYERS && !checkValidationLayerSupport()) {
             throw new RuntimeException("validation layers requested, but not available!");
         }
@@ -710,7 +787,7 @@ public class HelloTriangleApplication {
             throw new AssertionError("Failed to create VkInstance: " + translateVulkanResult(err));
         }
 
-        return new VkInstance(instance, pCreateInfo);
+        this.instance =  new VkInstance(instance, pCreateInfo);
     }
 
     private PointerBuffer getInstanceExtensions() {
@@ -827,9 +904,27 @@ public class HelloTriangleApplication {
             vkDestroyFence(device, inFlightFences[i], null);
         }
         vkDestroyCommandPool(device, commandPool, null);
+        cleanupSwapChain();
+        vkDestroyBuffer(device, vertexBuffer, null);
+        vkFreeMemory(device, vertexBufferMemory, null);
+        vkDestroyDevice(device, null);
+        vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
+        vkDestroySurfaceKHR(instance, surface, null);
+        vkDestroyInstance(instance, null);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+    }
+
+    private void cleanupSwapChain() {
         for (long framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, null);
         }
+        PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(commandBuffers.length);
+        for (VkCommandBuffer commandBuffer : commandBuffers) {
+            pointerBuffer.put(commandBuffer);
+        }
+        pointerBuffer.flip();
+        vkFreeCommandBuffers(device, commandPool, pointerBuffer);
         vkDestroyPipeline(device, graphicsPipeline, null);
         vkDestroyPipelineLayout(device, pipelineLayout, null);
         vkDestroyRenderPass(device, renderPass, null);
@@ -837,11 +932,5 @@ public class HelloTriangleApplication {
             vkDestroyImageView(device, imageView, null);
         }
         vkDestroySwapchainKHR(device, swapChain, null);
-        vkDestroyDevice(device, null);
-        vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
-        vkDestroySurfaceKHR(instance, surface, null);
-        vkDestroyInstance(instance, null);
-        glfwDestroyWindow(window);
-        glfwTerminate();
     }
 }
