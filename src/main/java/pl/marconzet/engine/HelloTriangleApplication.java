@@ -1,5 +1,6 @@
 package pl.marconzet.engine;
 
+import javafx.util.Pair;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
@@ -70,7 +71,7 @@ public class HelloTriangleApplication {
     private long[] inFlightFences;
 
 
-    public void run(){
+    public void run() {
         initWindow();
         initVulkan();
         mainLoop();
@@ -88,7 +89,8 @@ public class HelloTriangleApplication {
 
     private void initVulkan() {
         createInstance();
-        setupDebugCallback();
+        if(ENABLE_VALIDATION_LAYERS)
+            setupDebugCallback();
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
@@ -106,23 +108,88 @@ public class HelloTriangleApplication {
     }
 
     private void createVertexBuffer() {
+        long bufferSize = triangle.data.remaining();
+        Pair<Long, Long> buffer = createBuffer(
+                bufferSize,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        );
+        long stagingBuffer = buffer.getKey();
+        long stagingBufferMemory = buffer.getValue();
+
+        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, pData);
+        long data = pData.get(0);
+        memCopy(memAddress(triangle.data), data, triangle.data.remaining());
+        vkUnmapMemory(device, stagingBufferMemory);
+
+        buffer = createBuffer(
+                bufferSize,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+        );
+        vertexBuffer = buffer.getKey();
+        vertexBufferMemory = buffer.getValue();
+
+        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+
+        vkDestroyBuffer(device, stagingBuffer, null);
+        vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    private void copyBuffer(long srcBuffer, long dstBuffer, long size){
+        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+                .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+                .commandPool(commandPool)
+                .commandBufferCount(1);
+
+        PointerBuffer pointer = BufferUtils.createPointerBuffer(1);
+        vkAllocateCommandBuffers(device, allocateInfo, pointer);
+        VkCommandBuffer commandBuffer = new VkCommandBuffer(pointer.get(0), device);
+
+        VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.create()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+                .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+        vkBeginCommandBuffer(commandBuffer, beginInfo);
+
+        VkBufferCopy.Buffer copyRegion = VkBufferCopy.create(1)
+                .srcOffset(0)
+                .dstOffset(0)
+                .size(size);
+        vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, copyRegion);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(1).put(0, commandBuffer);
+        VkSubmitInfo submitInfo = VkSubmitInfo.create()
+                .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+                .pCommandBuffers(pointerBuffer);
+
+        vkQueueSubmit(graphicsQueue, submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+        vkFreeCommandBuffers(device, commandPool, pointerBuffer);
+    }
+
+    private Pair<Long, Long> createBuffer(long size, int usage, int properties) {
         VkBufferCreateInfo bufferCreateInfo = VkBufferCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                 .pNext(NULL)
-                .size(triangle.data.remaining())
-                .usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+                .size(size)
+                .usage(usage)
                 .flags(0)
                 .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
         LongBuffer lPointer = BufferUtils.createLongBuffer(1);
         int err = vkCreateBuffer(device, bufferCreateInfo, null, lPointer);
-        if(err != VK_SUCCESS){
+        if (err != VK_SUCCESS) {
             throw new RuntimeException("Failed to create vertex buffer: " + translateVulkanResult(err));
         }
-        vertexBuffer = lPointer.get(0);
+        long buffer = lPointer.get(0);
 
         VkMemoryRequirements memoryRequirements = VkMemoryRequirements.create();
-        vkGetBufferMemoryRequirements(device, vertexBuffer, memoryRequirements);
+        vkGetBufferMemoryRequirements(device, buffer, memoryRequirements);
 
         VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
@@ -131,31 +198,27 @@ public class HelloTriangleApplication {
                 .memoryTypeIndex(
                         findMemoryType(
                                 memoryRequirements.memoryTypeBits(),
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                                properties
                         )
                 );
 
         err = vkAllocateMemory(device, allocateInfo, null, lPointer);
-        if(err != VK_SUCCESS){
+        if (err != VK_SUCCESS) {
             throw new RuntimeException("Failed to allocate vertex buffer memory: " + translateVulkanResult(err));
         }
-        vertexBufferMemory = lPointer.get(0);
+        long bufferMemory = lPointer.get(0);
 
-        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+        vkBindBufferMemory(device, buffer, bufferMemory, 0);
 
-        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
-        vkMapMemory(device, vertexBufferMemory, 0, bufferCreateInfo.size(), 0, pData);
-        long data = pData.get(0);
-        memCopy(memAddress(triangle.data), data, triangle.data.remaining());
-        vkUnmapMemory(device, vertexBufferMemory);
+        return new Pair<>(buffer,bufferMemory);
     }
 
-    private int findMemoryType(int typeFilter, int properties){
+    private int findMemoryType(int typeFilter, int properties) {
         VkPhysicalDeviceMemoryProperties memoryProperties = VkPhysicalDeviceMemoryProperties.create();
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, memoryProperties);
         for (int i = 0; i < memoryProperties.memoryTypeCount(); i++) {
-            if((typeFilter & (1 << i)) > 0
-                    && (memoryProperties.memoryTypes(i).propertyFlags() & properties) == properties){
+            if ((typeFilter & (1 << i)) > 0
+                    && (memoryProperties.memoryTypes(i).propertyFlags() & properties) == properties) {
                 return i;
             }
         }
@@ -232,9 +295,9 @@ public class HelloTriangleApplication {
 
             VkClearValue.Buffer clearValues = VkClearValue.create(1);
             clearValues.color()
-                    .float32(0, 100/255.0f)
-                    .float32(1, 149/255.0f)
-                    .float32(2, 237/255.0f)
+                    .float32(0, 100 / 255.0f)
+                    .float32(1, 149 / 255.0f)
+                    .float32(2, 237 / 255.0f)
                     .float32(3, 1.0f);
 
             VkRenderPassBeginInfo renderPassBeginInfo = VkRenderPassBeginInfo.create()
@@ -299,7 +362,7 @@ public class HelloTriangleApplication {
 
             LongBuffer pFramebuffer = BufferUtils.createLongBuffer(1);
             int err = vkCreateFramebuffer(device, framebufferInfo, null, pFramebuffer);
-            if (err !=VK_SUCCESS){
+            if (err != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create framebuffer: " + translateVulkanResult(err));
             }
             framebuffers[i] = pFramebuffer.get(0);
@@ -346,7 +409,7 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create clear render pass: " + translateVulkanResult(err));
         }
-        this.renderPass =  renderPass;
+        this.renderPass = renderPass;
     }
 
     private void createGraphicsPipeline() {
@@ -379,7 +442,7 @@ public class HelloTriangleApplication {
                 .maxDepth(1.0f);
 
         VkOffset2D offset = VkOffset2D.create()
-                .set(0,0);
+                .set(0, 0);
 
         VkRect2D.Buffer scissor = VkRect2D.create(1)
                 .offset(offset)
@@ -433,7 +496,7 @@ public class HelloTriangleApplication {
                 .logicOpEnable(false)
                 .logicOp(VK_LOGIC_OP_COPY)
                 .pAttachments(colorBlendAttachment);
-        colorBlending.blendConstants().put(new float[]{0f,0f,0f,0f}).flip();
+        colorBlending.blendConstants().put(new float[]{0f, 0f, 0f, 0f}).flip();
 
         int dynamicStates[] = {
                 VK_DYNAMIC_STATE_VIEWPORT,
@@ -535,7 +598,7 @@ public class HelloTriangleApplication {
                 throw new AssertionError("Failed to create image view: " + translateVulkanResult(err));
             }
         }
-        swapChainImageViews =  imageViews;
+        swapChainImageViews = imageViews;
     }
 
     private void createSwapChain() {
@@ -547,7 +610,7 @@ public class HelloTriangleApplication {
         swapChainImageFormat = surfaceFormat.format();
 
         int imageCount = swapChainSupport.getCapabilities().minImageCount() + 1;
-        if(swapChainSupport.getCapabilities().maxImageCount() > 0){
+        if (swapChainSupport.getCapabilities().maxImageCount() > 0) {
             imageCount = Math.min(imageCount, swapChainSupport.getCapabilities().maxImageCount());
         }
 
@@ -588,9 +651,7 @@ public class HelloTriangleApplication {
         }
 
 
-
-
-        this.swapChain =  swapChain;
+        this.swapChain = swapChain;
     }
 
     private void getSwapChainImages() {
@@ -600,7 +661,7 @@ public class HelloTriangleApplication {
         vkGetSwapchainImagesKHR(device, swapChain, pImageCount, swapChainImages);
         long[] res = new long[pImageCount.get(0)];
         swapChainImages.get(res);
-        this.swapChainImages =  res;
+        this.swapChainImages = res;
     }
 
     private void createSurface() {
@@ -609,7 +670,7 @@ public class HelloTriangleApplication {
         if (err != VK_SUCCESS) {
             throw new AssertionError("Failed to create surface: " + translateVulkanResult(err));
         }
-        surface =  pSurface.get();
+        surface = pSurface.get();
     }
 
     private VkQueue createDeviceQueue(int queueFamilyIndex) {
@@ -648,7 +709,7 @@ public class HelloTriangleApplication {
                 .pEnabledFeatures(deviceFeatures)
                 .ppEnabledExtensionNames(ppExtensionNames);
 
-        if(ENABLE_VALIDATION_LAYERS) {
+        if (ENABLE_VALIDATION_LAYERS) {
             PointerBuffer ppValidationLayers = BufferUtils.createPointerBuffer(VALIDATION_LAYERS.length);
             for (String layer : VALIDATION_LAYERS) {
                 ppValidationLayers.put(memUTF8(layer));
@@ -674,10 +735,10 @@ public class HelloTriangleApplication {
 
         PointerBuffer pDevices = BufferUtils.createPointerBuffer(deviceCount);
         vkEnumeratePhysicalDevices(instance, pDeviceCount, pDevices);
-        while(pDevices.hasRemaining()){
+        while (pDevices.hasRemaining()) {
             VkPhysicalDevice physicalDevice = new VkPhysicalDevice(pDevices.get(), instance);
-            if(isDeviceSuitable(physicalDevice)) {
-                this.physicalDevice =  physicalDevice;
+            if (isDeviceSuitable(physicalDevice)) {
+                this.physicalDevice = physicalDevice;
                 return;
             }
         }
@@ -693,7 +754,6 @@ public class HelloTriangleApplication {
 
         swapChainSupportDetails = new SwapChainSupportDetails(physicalDevice, surface);
         boolean swapChainGood = swapChainSupportDetails.getFormats().sizeof() > 0 && swapChainSupportDetails.getPresentModes().hasRemaining();
-
 
 
         indices = new QueueFamilyIndices(physicalDevice, surface);
@@ -716,7 +776,7 @@ public class HelloTriangleApplication {
         int found = 0;
         for (String extension : DEVICE_EXTENSIONS) {
             for (VkExtensionProperties extensionProperties : pAvailableExtensions) {
-                if(extensionProperties.extensionNameString().equals(extension)){
+                if (extensionProperties.extensionNameString().equals(extension)) {
                     found++;
                     break;
                 }
@@ -734,7 +794,7 @@ public class HelloTriangleApplication {
                 return 0;
             }
         };
-        debugCallbackHandle =  setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT, debugCallback);
+        debugCallbackHandle = setupDebugging(instance, VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT, debugCallback);
     }
 
     private long setupDebugging(VkInstance instance, int flags, VkDebugReportCallbackEXT callback) {
@@ -772,7 +832,7 @@ public class HelloTriangleApplication {
                 .pApplicationInfo(appInfo)
                 .ppEnabledExtensionNames(ppEnabledExtensionNames);
 
-        if(ENABLE_VALIDATION_LAYERS){
+        if (ENABLE_VALIDATION_LAYERS) {
             PointerBuffer ppValidationLayers = BufferUtils.createPointerBuffer(VALIDATION_LAYERS.length);
             for (String layer : VALIDATION_LAYERS) {
                 ppValidationLayers.put(memUTF8(layer));
@@ -787,7 +847,7 @@ public class HelloTriangleApplication {
             throw new AssertionError("Failed to create VkInstance: " + translateVulkanResult(err));
         }
 
-        this.instance =  new VkInstance(instance, pCreateInfo);
+        this.instance = new VkInstance(instance, pCreateInfo);
     }
 
     private PointerBuffer getInstanceExtensions() {
@@ -803,7 +863,7 @@ public class HelloTriangleApplication {
         }
 
         int capacity = ppExtensions.remaining() + INSTANCE_EXTENSIONS.length;
-        if(ENABLE_VALIDATION_LAYERS) {
+        if (ENABLE_VALIDATION_LAYERS) {
             capacity += VALIDATION_LAYERS_INSTANCE_EXTENSIONS.length;
         }
 
@@ -812,7 +872,7 @@ public class HelloTriangleApplication {
         for (String extension : INSTANCE_EXTENSIONS) {
             ppEnabledExtensionNames.put(memUTF8(extension));
         }
-        if(ENABLE_VALIDATION_LAYERS) {
+        if (ENABLE_VALIDATION_LAYERS) {
             for (String extension : VALIDATION_LAYERS_INSTANCE_EXTENSIONS) {
                 ppEnabledExtensionNames.put(memUTF8(extension));
             }
@@ -829,20 +889,20 @@ public class HelloTriangleApplication {
 
         VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.create(layerCount);
         vkEnumerateInstanceLayerProperties(pLayerCount, pAvailableLayers);
-        while(pAvailableLayers.hasRemaining()){
+        while (pAvailableLayers.hasRemaining()) {
             System.out.println(pAvailableLayers.get().layerNameString());
         }
         pAvailableLayers.rewind();
 
         for (String validationLayer : VALIDATION_LAYERS) {
             boolean found = false;
-            while(pAvailableLayers.hasRemaining()) {
-                if(pAvailableLayers.get().layerNameString().equals(validationLayer)) {
+            while (pAvailableLayers.hasRemaining()) {
+                if (pAvailableLayers.get().layerNameString().equals(validationLayer)) {
                     found = true;
                     break;
                 }
             }
-            if(!found)
+            if (!found)
                 return false;
             pAvailableLayers.rewind();
         }
@@ -908,7 +968,8 @@ public class HelloTriangleApplication {
         vkDestroyBuffer(device, vertexBuffer, null);
         vkFreeMemory(device, vertexBufferMemory, null);
         vkDestroyDevice(device, null);
-        vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
+        if(ENABLE_VALIDATION_LAYERS)
+            vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
         vkDestroySurfaceKHR(instance, surface, null);
         vkDestroyInstance(instance, null);
         glfwDestroyWindow(window);
