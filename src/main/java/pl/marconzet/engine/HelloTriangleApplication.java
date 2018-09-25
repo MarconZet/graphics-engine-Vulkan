@@ -1,6 +1,8 @@
 package pl.marconzet.engine;
 
 import javafx.util.Pair;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
@@ -38,6 +40,7 @@ public class HelloTriangleApplication {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 600;
 
+    private static long startTime;
     private Model rectangle = new Model();
 
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
@@ -59,6 +62,7 @@ public class HelloTriangleApplication {
     private VkExtent2D swapChainExtent;
     private long[] swapChainImageViews;
     private long renderPass;
+    private long descriptorSetLayout;
     private long pipelineLayout;
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
@@ -67,6 +71,8 @@ public class HelloTriangleApplication {
     private long vertexBufferMemory;
     private long indexBuffer;
     private long indexBufferMemory;
+    private long[] uniformBuffers;
+    private long[] uniformBuffersMemory;
     private VkCommandBuffer[] commandBuffers;
     private long[] imageAvailableSemaphore;
     private long[] renderFinishedSemaphore;
@@ -101,13 +107,52 @@ public class HelloTriangleApplication {
         getSwapChainImages();
         createImageViews();
         createRenderPass();
+        createDescriptorSetLayout();
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPoll();
         createVertexBuffer();
         createIndexBuffer();
+        createUniformBuffers();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    private void createUniformBuffers() {
+        long bufferSize = UniformBufferObject.sizeOf();
+
+        uniformBuffers = new long[swapChainImages.length];
+        uniformBuffersMemory = new long[swapChainImages.length];
+
+        for (int i = 0; i < swapChainImages.length; i++) {
+            Pair<Long, Long> buffer = createBuffer(
+                    bufferSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+            );
+            uniformBuffers[i] = buffer.getKey();
+            uniformBuffersMemory[i] = buffer.getValue();
+        }
+    }
+
+    private void createDescriptorSetLayout() {
+        VkDescriptorSetLayoutBinding.Buffer layoutBinding = VkDescriptorSetLayoutBinding.create(1)
+                .binding(0)
+                .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(1)
+                .stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
+                .pImmutableSamplers(null);
+
+        VkDescriptorSetLayoutCreateInfo layoutCreateInfo = VkDescriptorSetLayoutCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+                .pBindings(layoutBinding);
+
+        LongBuffer p = BufferUtils.createLongBuffer(1);
+        int err = vkCreateDescriptorSetLayout(device, layoutCreateInfo, null, p);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create descriptor set layout: " + translateVulkanResult(err));
+        }
+        descriptorSetLayout = p.get(0);
     }
 
     private void createIndexBuffer() {
@@ -545,7 +590,7 @@ public class HelloTriangleApplication {
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
-                .pSetLayouts(null)
+                .pSetLayouts(BufferUtils.createLongBuffer(1).put(0, descriptorSetLayout))
                 .pPushConstantRanges(null);
 
         LongBuffer pPipelineLayout = BufferUtils.createLongBuffer(1);
@@ -945,6 +990,7 @@ public class HelloTriangleApplication {
     }
 
     private void mainLoop() {
+        startTime = System.currentTimeMillis();
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
             drawFrame();
@@ -960,6 +1006,8 @@ public class HelloTriangleApplication {
         IntBuffer pointer = BufferUtils.createIntBuffer(1);
         vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pointer);
         int imageIndex = pointer.get(0);
+
+        updateUniformBuffer(imageIndex);
 
         LongBuffer waitSemaphores = BufferUtils.createLongBuffer(1).put(0, imageAvailableSemaphore[currentFrame]);
         LongBuffer signalSemaphores = BufferUtils.createLongBuffer(1).put(0, renderFinishedSemaphore[currentFrame]);
@@ -992,6 +1040,32 @@ public class HelloTriangleApplication {
 
     }
 
+    private void updateUniformBuffer(int currentImage) {
+        long currentTime = System.currentTimeMillis();
+        long time = currentTime - startTime;
+        time /= 1000;
+
+        Matrix4f transformation = new Matrix4f().rotateZ(time * (float)Math.PI/2);
+        Matrix4f view = new Matrix4f().lookAt(
+                new Vector3f(2f, 2f, 2f),
+                new Vector3f(0f, 0f, 0f),
+                new Vector3f(0f, 0f, 1f)
+        );
+        Matrix4f projection = new Matrix4f().perspectiveLH(
+                (float)Math.PI/2,
+                (float)swapChainExtent.width()/swapChainExtent.height(),
+                0.1f, 10f);
+
+        UniformBufferObject ubo = new UniformBufferObject(transformation, view, projection);
+
+        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
+        vkMapMemory(device, uniformBuffersMemory[currentImage], 0, ubo.sizeOf(), 0, pData);
+        long data = pData.get(0);
+        memCopy(memAddress(rectangle.indices), data, ubo.sizeOf());
+        vkUnmapMemory(device, uniformBuffersMemory[currentImage]);
+
+    }
+
     private void cleanup() {
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, renderFinishedSemaphore[i], null);
@@ -1000,6 +1074,11 @@ public class HelloTriangleApplication {
         }
         vkDestroyCommandPool(device, commandPool, null);
         cleanupSwapChain();
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, null);
+        for (int i = 0; i < swapChainImages.length; i++) {
+            vkDestroyBuffer(device, uniformBuffers[i], null);
+            vkFreeMemory(device, uniformBuffersMemory[i], null);
+        }
         vkDestroyBuffer(device, vertexBuffer, null);
         vkFreeMemory(device, vertexBufferMemory, null);
         vkDestroyBuffer(device, indexBuffer, null);
