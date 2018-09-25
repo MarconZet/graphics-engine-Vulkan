@@ -1,7 +1,5 @@
 package pl.marconzet.engine;
 
-import org.joml.Vector2f;
-import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
 import org.lwjgl.vulkan.VkVertexInputBindingDescription;
@@ -14,23 +12,33 @@ import static org.lwjgl.vulkan.VK10.*;
  * @author MarconZet
  * Created 19.09.2018
  */
-public class Vertices {
-    public ByteBuffer data;
-    public int size = 3;
+public class Model {
+    public ByteBuffer vertices;
+    public ByteBuffer indices;
+    public int size = 4;
 
-    private float[] pos = {0.0f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f};
+    private float[] pos = {-0.5f,-0.5f,0.5f,-0.5f,0.5f,0.5f,-0.5f,0.5f};
     private int sizePos = 2;
-    private float[] colour = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    private float[] colour = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     private int sizeColour = 3;
 
-    public Vertices() {
-        data = BufferUtils.createByteBuffer(4 * (pos.length + colour.length));
-        FloatBuffer fb = data.asFloatBuffer();
+    private int[] index = {0, 1, 2, 2, 3, 0};
+
+    public Model() {
+        vertices = BufferUtils.createByteBuffer(4 * (pos.length + colour.length));
+        FloatBuffer fb = vertices.asFloatBuffer();
         for (int i = 0; i < size; i++) {
             fb.put(pos[i*sizePos]).put(pos[i*sizePos+1]);
             fb.put(colour[i*sizeColour]).put(colour[i*sizeColour+1]).put(colour[i*sizeColour+2]);
         }
         fb.flip();
+
+        indices = BufferUtils.createByteBuffer(index.length * 4);
+        IntBuffer ib = indices.asIntBuffer();
+        for (int i : index) {
+            ib.put(i);
+        }
+        ib.flip();
     }
 
     VkVertexInputBindingDescription.Buffer getBindingDescription() {
@@ -55,5 +63,17 @@ public class Vertices {
                 .format(VK_FORMAT_R32G32B32_SFLOAT)
                 .offset(2 * 4);
         return attributeDescriptions;
+    }
+
+    public float[] getPos() {
+        return pos;
+    }
+
+    public float[] getColour() {
+        return colour;
+    }
+
+    public int[] getIndex() {
+        return index;
     }
 }

@@ -38,7 +38,7 @@ public class HelloTriangleApplication {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 600;
 
-    private Vertices triangle = new Vertices();
+    private Model rectangle = new Model();
 
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private int currentFrame = 0;
@@ -65,6 +65,8 @@ public class HelloTriangleApplication {
     private long commandPool;
     private long vertexBuffer;
     private long vertexBufferMemory;
+    private long indexBuffer;
+    private long indexBufferMemory;
     private VkCommandBuffer[] commandBuffers;
     private long[] imageAvailableSemaphore;
     private long[] renderFinishedSemaphore;
@@ -103,12 +105,13 @@ public class HelloTriangleApplication {
         createFramebuffers();
         createCommandPoll();
         createVertexBuffer();
+        createIndexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
 
-    private void createVertexBuffer() {
-        long bufferSize = triangle.data.remaining();
+    private void createIndexBuffer() {
+        long bufferSize = rectangle.indices.remaining();
         Pair<Long, Long> buffer = createBuffer(
                 bufferSize,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -120,7 +123,37 @@ public class HelloTriangleApplication {
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, pData);
         long data = pData.get(0);
-        memCopy(memAddress(triangle.data), data, triangle.data.remaining());
+        memCopy(memAddress(rectangle.indices), data, bufferSize);
+        vkUnmapMemory(device, stagingBufferMemory);
+
+        buffer = createBuffer(
+                bufferSize,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+        );
+        indexBuffer = buffer.getKey();
+        indexBufferMemory = buffer.getValue();
+
+        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+        vkDestroyBuffer(device, stagingBuffer, null);
+        vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    private void createVertexBuffer() {
+        long bufferSize = rectangle.vertices.remaining();
+        Pair<Long, Long> buffer = createBuffer(
+                bufferSize,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        );
+        long stagingBuffer = buffer.getKey();
+        long stagingBufferMemory = buffer.getValue();
+
+        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, pData);
+        long data = pData.get(0);
+        memCopy(memAddress(rectangle.vertices), data, bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
         buffer = createBuffer(
@@ -317,7 +350,9 @@ public class HelloTriangleApplication {
             LongBuffer offsets = BufferUtils.createLongBuffer(1).put(0, 0);
             vkCmdBindVertexBuffers(commandBuffers[i], 0, vertexBuffers, offsets);
 
-            vkCmdDraw(commandBuffers[i], triangle.size, 1, 0, 0);
+            vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            vkCmdDrawIndexed(commandBuffers[i], rectangle.getIndex().length, 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffers[i]);
 
@@ -424,8 +459,8 @@ public class HelloTriangleApplication {
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
                 .pNext(NULL)
-                .pVertexBindingDescriptions(triangle.getBindingDescription())
-                .pVertexAttributeDescriptions(triangle.getAttributeDescriptions());
+                .pVertexBindingDescriptions(rectangle.getBindingDescription())
+                .pVertexAttributeDescriptions(rectangle.getAttributeDescriptions());
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
@@ -967,6 +1002,8 @@ public class HelloTriangleApplication {
         cleanupSwapChain();
         vkDestroyBuffer(device, vertexBuffer, null);
         vkFreeMemory(device, vertexBufferMemory, null);
+        vkDestroyBuffer(device, indexBuffer, null);
+        vkFreeMemory(device, indexBufferMemory, null);
         vkDestroyDevice(device, null);
         if(ENABLE_VALIDATION_LAYERS)
             vkDestroyDebugReportCallbackEXT(instance, debugCallbackHandle, null);
