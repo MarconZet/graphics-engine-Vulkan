@@ -25,7 +25,9 @@ public class UniformBufferObject {
         data = BufferUtils.createByteBuffer((int)sizeOf());
         FloatBuffer fb = data.asFloatBuffer();
         modelMatrix.get(fb);
+        fb.position(16);
         viewMatrix.get(fb);
+        fb.position(32);
         projMatrix.get(fb);
     }
 

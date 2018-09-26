@@ -73,6 +73,8 @@ public class HelloTriangleApplication {
     private long indexBufferMemory;
     private long[] uniformBuffers;
     private long[] uniformBuffersMemory;
+    private long descriptorPool;
+    private long[] descriptorSets;
     private VkCommandBuffer[] commandBuffers;
     private long[] imageAvailableSemaphore;
     private long[] renderFinishedSemaphore;
@@ -114,8 +116,71 @@ public class HelloTriangleApplication {
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
+        createDescriptorPoll();
+        createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    private void createDescriptorSets() {
+        LongBuffer layouts = BufferUtils.createLongBuffer(swapChainImages.length);
+        for (int i = 0; i < swapChainImages.length; i++) {
+            layouts.put(descriptorSetLayout);
+        }
+        layouts.flip();
+        VkDescriptorSetAllocateInfo allocateInfo = VkDescriptorSetAllocateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+                .descriptorPool(descriptorPool)
+                .pSetLayouts(layouts);
+
+
+        LongBuffer array = BufferUtils.createLongBuffer(swapChainImages.length);
+        int err = vkAllocateDescriptorSets(device, allocateInfo, array);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create descriptor sets: " + translateVulkanResult(err));
+        }
+        descriptorSets = new long[swapChainImages.length];
+        array.get(descriptorSets);
+
+        for (int i = 0; i < swapChainImages.length; i++) {
+            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.create(1)
+                    .buffer(uniformBuffers[i])
+                    .offset(0)
+                    .range(UniformBufferObject.sizeOf());
+
+            VkWriteDescriptorSet.Buffer writeDescriptor = VkWriteDescriptorSet.create(1)
+                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                    .dstSet(descriptorSets[i])
+                    .dstBinding(0)
+                    .dstArrayElement(0)
+                    .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                    .pBufferInfo(bufferInfo)
+                    .pImageInfo(null)
+                    .pTexelBufferView(null);
+
+            vkUpdateDescriptorSets(device, writeDescriptor, null);
+        }
+    }
+
+    private void createDescriptorPoll() {
+        VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.create(1)
+                .type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(swapChainImages.length);
+
+        VkDescriptorPoolCreateInfo poolCreateInfo = VkDescriptorPoolCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
+                .pPoolSizes(poolSize)
+                .maxSets(swapChainImages.length)
+                .flags(0);
+
+        LongBuffer pointer = BufferUtils.createLongBuffer(1);
+        int err = vkCreateDescriptorPool(device, poolCreateInfo, null, pointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create descriptor pool: " + translateVulkanResult(err));
+        }
+        descriptorPool = pointer.get(0);
+
+
     }
 
     private void createUniformBuffers() {
@@ -397,6 +462,9 @@ public class HelloTriangleApplication {
 
             vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+            LongBuffer descriptorSet = BufferUtils.createLongBuffer(1).put(0, descriptorSets[i]);
+            vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, descriptorSet, null);
+
             vkCmdDrawIndexed(commandBuffers[i], rectangle.getIndex().length, 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffers[i]);
@@ -543,8 +611,8 @@ public class HelloTriangleApplication {
                 .rasterizerDiscardEnable(false)
                 .polygonMode(VK_POLYGON_MODE_FILL)
                 .lineWidth(1.0f)
-                .cullMode(VK_CULL_MODE_BACK_BIT)
-                .frontFace(VK_FRONT_FACE_CLOCKWISE)
+                .cullMode(VK_CULL_MODE_NONE)
+                .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
                 .depthBiasEnable(false)
                 .depthBiasConstantFactor(0.0f)
                 .depthBiasClamp(0.0f)
@@ -579,7 +647,6 @@ public class HelloTriangleApplication {
         colorBlending.blendConstants().put(new float[]{0f, 0f, 0f, 0f}).flip();
 
         int dynamicStates[] = {
-                VK_DYNAMIC_STATE_VIEWPORT,
                 VK_DYNAMIC_STATE_LINE_WIDTH
         };
         IntBuffer pDynamicStates = BufferUtils.createIntBuffer(2).put(dynamicStates);
@@ -969,11 +1036,6 @@ public class HelloTriangleApplication {
 
         VkLayerProperties.Buffer pAvailableLayers = VkLayerProperties.create(layerCount);
         vkEnumerateInstanceLayerProperties(pLayerCount, pAvailableLayers);
-        while (pAvailableLayers.hasRemaining()) {
-            System.out.println(pAvailableLayers.get().layerNameString());
-        }
-        pAvailableLayers.rewind();
-
         for (String validationLayer : VALIDATION_LAYERS) {
             boolean found = false;
             while (pAvailableLayers.hasRemaining()) {
@@ -1042,26 +1104,23 @@ public class HelloTriangleApplication {
 
     private void updateUniformBuffer(int currentImage) {
         long currentTime = System.currentTimeMillis();
-        long time = currentTime - startTime;
+        float time = currentTime - startTime;
         time /= 1000;
 
-        Matrix4f transformation = new Matrix4f().rotateZ(time * (float)Math.PI/2);
-        Matrix4f view = new Matrix4f().lookAt(
-                new Vector3f(2f, 2f, 2f),
-                new Vector3f(0f, 0f, 0f),
-                new Vector3f(0f, 0f, 1f)
-        );
+        Matrix4f transformation = new Matrix4f().translate(0, 0, 1).rotateZ(time * (float)Math.PI/2);
+        Matrix4f view = new Matrix4f().translate(0f, -0.7f, 0.2f).rotateX(-(float)Math.PI/4);
         Matrix4f projection = new Matrix4f().perspectiveLH(
                 (float)Math.PI/2,
                 (float)swapChainExtent.width()/swapChainExtent.height(),
                 0.1f, 10f);
 
         UniformBufferObject ubo = new UniformBufferObject(transformation, view, projection);
+        //ubo = new UniformBufferObject(new Matrix4f(), new Matrix4f(), new Matrix4f());
 
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
         vkMapMemory(device, uniformBuffersMemory[currentImage], 0, ubo.sizeOf(), 0, pData);
         long data = pData.get(0);
-        memCopy(memAddress(rectangle.indices), data, ubo.sizeOf());
+        memCopy(memAddress(ubo.data), data, ubo.sizeOf());
         vkUnmapMemory(device, uniformBuffersMemory[currentImage]);
 
     }
@@ -1072,8 +1131,9 @@ public class HelloTriangleApplication {
             vkDestroySemaphore(device, imageAvailableSemaphore[i], null);
             vkDestroyFence(device, inFlightFences[i], null);
         }
-        vkDestroyCommandPool(device, commandPool, null);
         cleanupSwapChain();
+        vkDestroyCommandPool(device, commandPool, null);
+        vkDestroyDescriptorPool(device, descriptorPool, null);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, null);
         for (int i = 0; i < swapChainImages.length; i++) {
             vkDestroyBuffer(device, uniformBuffers[i], null);
