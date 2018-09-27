@@ -2,17 +2,21 @@ package pl.marconzet.engine;
 
 import javafx.util.Pair;
 import org.joml.Matrix4f;
-import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.vulkan.*;
 
 import java.io.IOException;
 import java.nio.*;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
+import static org.lwjgl.stb.STBImage.STBI_rgb_alpha;
+import static org.lwjgl.stb.STBImage.stbi_image_free;
+import static org.lwjgl.stb.STBImage.stbi_load;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.system.libc.LibCString.memcpy;
 import static org.lwjgl.vulkan.EXTDebugReport.*;
@@ -63,10 +67,13 @@ public class HelloTriangleApplication {
     private long[] swapChainImageViews;
     private long renderPass;
     private long descriptorSetLayout;
+    private List<Long> shaderModules = new ArrayList<>();
     private long pipelineLayout;
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
     private long commandPool;
+    private long textureImage;
+    private long textureImageMemory;
     private long vertexBuffer;
     private long vertexBufferMemory;
     private long indexBuffer;
@@ -113,6 +120,7 @@ public class HelloTriangleApplication {
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPoll();
+        createTextureImage();
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
@@ -120,6 +128,181 @@ public class HelloTriangleApplication {
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    private void copyBufferToImage(long buffer, long image, int width, int height){
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+        VkBufferImageCopy.Buffer region = VkBufferImageCopy.create(1)
+                .bufferOffset(0)
+                .bufferRowLength(0)
+                .bufferImageHeight(0);
+
+        region.imageSubresource()
+                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .mipLevel(0)
+                .baseArrayLayer(0)
+                .layerCount(1);
+
+        region.imageOffset().set(0,0,0);
+        region.imageExtent().set(width, height, 1);
+
+        vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+
+        endSingleTimeCommands(commandBuffer);
+    }
+
+    private void transitionImageLayout(long image, long format, int oldLayout, int newLayout) {
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+        VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.create(1)
+                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
+                .oldLayout(oldLayout)
+                .newLayout(newLayout)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .image(image);
+
+        barrier.subresourceRange()
+                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .baseMipLevel(0)
+                .levelCount(1)
+                .baseArrayLayer(0)
+                .layerCount(1);
+
+        barrier.srcAccessMask(0).dstAccessMask(0);
+
+        int sourceStage;
+        int destinationStage;
+
+        if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            barrier.srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+
+            sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else {
+            throw new RuntimeException("Unsupported layout transition");
+        }
+
+        vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, null, null, barrier);
+
+        endSingleTimeCommands(commandBuffer);
+    }
+
+    private VkCommandBuffer beginSingleTimeCommands(){
+        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+                .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+                .commandPool(commandPool)
+                .commandBufferCount(1);
+
+        PointerBuffer pointer = BufferUtils.createPointerBuffer(1);
+        vkAllocateCommandBuffers(device, allocateInfo, pointer);
+        VkCommandBuffer commandBuffer = new VkCommandBuffer(pointer.get(0), device);
+
+        VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.create()
+                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+                .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+        vkBeginCommandBuffer(commandBuffer, beginInfo);
+
+        return commandBuffer;
+    }
+
+
+    private void createTextureImage() {
+        IntBuffer[] textureInfo = new IntBuffer[3];
+        for (int i = 0; i < textureInfo.length; i++) {
+            textureInfo[i] = BufferUtils.createIntBuffer(1);
+        }
+        String path = HelloTriangleApplication.class.getResource("jp2.png").getFile().substring(1);
+        ByteBuffer pixels = stbi_load(path, textureInfo[0], textureInfo[1], textureInfo[2], STBI_rgb_alpha);
+        int texWidth = textureInfo[0].get();
+        int texHeight = textureInfo[1].get();
+        int texChannels = textureInfo[2].get();
+        long imageSize = texWidth * texHeight * 4;
+        if(pixels == null){
+            throw new RuntimeException("Failed ot load texture image");
+        }
+
+        Pair<Long, Long> buffer = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        long stagingBuffer = buffer.getKey();
+        long stagingBufferMemory = buffer.getValue();
+        PointerBuffer pData = BufferUtils.createPointerBuffer(1);
+        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, pData);
+        long data = pData.get(0);
+        memCopy(memAddress(pixels), data, imageSize);
+        vkUnmapMemory(device, stagingBufferMemory);
+
+        stbi_image_free(pixels);
+
+        Pair<Long, Long> imageBuffer = createImage(
+                texWidth,
+                texHeight,
+                VK_FORMAT_B8G8R8A8_UNORM,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+        );
+        textureImage = imageBuffer.getKey();
+        textureImageMemory = imageBuffer.getValue();
+
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        vkDestroyBuffer(device, stagingBuffer, null);
+        vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    private Pair<Long, Long> createImage(int width, int height, int format, int tilting, int usage, int properties) {
+        VkImageCreateInfo imageCreateInfo = VkImageCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
+                .imageType(VK_IMAGE_TYPE_2D)
+                .mipLevels(1)
+                .arrayLayers(1)
+                .format(format)
+                .tiling(tilting)
+                .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                .usage(usage)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .flags(0);
+
+        imageCreateInfo.extent()
+                .width(width)
+                .height(height)
+                .depth(1);
+
+        LongBuffer pointer = BufferUtils.createLongBuffer(1);
+        int err = vkCreateImage(device, imageCreateInfo, null, pointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create image: " + translateVulkanResult(err));
+        }
+        long image = pointer.get(0);
+
+        VkMemoryRequirements memoryRequirements = VkMemoryRequirements.create();
+        vkGetImageMemoryRequirements(device, image, memoryRequirements);
+
+        VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+                .allocationSize(memoryRequirements.size())
+                .memoryTypeIndex(findMemoryType(memoryRequirements.memoryTypeBits(), properties));
+
+        err = vkAllocateMemory(device, allocateInfo, null, pointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("FAiled to allocate memory: " + translateVulkanResult(err));
+        }
+        long imageMemory = pointer.get(0);
+
+        vkBindImageMemory(device, image, imageMemory, 0);
+
+        return new Pair<>(image, imageMemory);
     }
 
     private void createDescriptorSets() {
@@ -281,21 +464,7 @@ public class HelloTriangleApplication {
     }
 
     private void copyBuffer(long srcBuffer, long dstBuffer, long size){
-        VkCommandBufferAllocateInfo allocateInfo = VkCommandBufferAllocateInfo.create()
-                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
-                .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-                .commandPool(commandPool)
-                .commandBufferCount(1);
-
-        PointerBuffer pointer = BufferUtils.createPointerBuffer(1);
-        vkAllocateCommandBuffers(device, allocateInfo, pointer);
-        VkCommandBuffer commandBuffer = new VkCommandBuffer(pointer.get(0), device);
-
-        VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.create()
-                .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
-                .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
-        vkBeginCommandBuffer(commandBuffer, beginInfo);
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
         VkBufferCopy.Buffer copyRegion = VkBufferCopy.create(1)
                 .srcOffset(0)
@@ -303,6 +472,10 @@ public class HelloTriangleApplication {
                 .size(size);
         vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, copyRegion);
 
+        endSingleTimeCommands(commandBuffer);
+    }
+
+    private void endSingleTimeCommands(VkCommandBuffer commandBuffer) {
         vkEndCommandBuffer(commandBuffer);
 
         PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(1).put(0, commandBuffer);
@@ -712,10 +885,12 @@ public class HelloTriangleApplication {
     }
 
     private VkPipelineShaderStageCreateInfo loadShader(VkDevice device, String classPath, int stage) throws IOException {
+        long shaderModule = loadShader(classPath, device);
+        shaderModules.add(shaderModule);
         return VkPipelineShaderStageCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
                 .stage(stage)
-                .module(loadShader(classPath, device))
+                .module(shaderModule)
                 .pName(memUTF8("main"));
     }
 
@@ -1132,6 +1307,9 @@ public class HelloTriangleApplication {
             vkDestroyFence(device, inFlightFences[i], null);
         }
         cleanupSwapChain();
+        for (Long shaderModule : shaderModules) {
+            vkDestroyShaderModule(device, shaderModule, null);
+        }
         vkDestroyCommandPool(device, commandPool, null);
         vkDestroyDescriptorPool(device, descriptorPool, null);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, null);
@@ -1139,6 +1317,8 @@ public class HelloTriangleApplication {
             vkDestroyBuffer(device, uniformBuffers[i], null);
             vkFreeMemory(device, uniformBuffersMemory[i], null);
         }
+        vkDestroyImage(device, textureImage, null);
+        vkFreeMemory(device, textureImageMemory, null);
         vkDestroyBuffer(device, vertexBuffer, null);
         vkFreeMemory(device, vertexBufferMemory, null);
         vkDestroyBuffer(device, indexBuffer, null);
