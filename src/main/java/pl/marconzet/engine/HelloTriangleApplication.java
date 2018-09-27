@@ -387,23 +387,39 @@ public class HelloTriangleApplication {
                     .offset(0)
                     .range(UniformBufferObject.sizeOf());
 
-            VkWriteDescriptorSet.Buffer writeDescriptor = VkWriteDescriptorSet.create(1)
+            VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.create(1)
+                    .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .imageView(textureImageView)
+                    .sampler(textureSampler);
+
+            VkWriteDescriptorSet.Buffer writeDescriptor = VkWriteDescriptorSet.create(2);
+            writeDescriptor.get(0)
                     .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
                     .dstSet(descriptorSets[i])
                     .dstBinding(0)
                     .dstArrayElement(0)
                     .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-                    .pBufferInfo(bufferInfo)
-                    .pImageInfo(null)
-                    .pTexelBufferView(null);
+                    .pBufferInfo(bufferInfo);
+
+            writeDescriptor.get(1)
+                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                    .dstSet(descriptorSets[i])
+                    .dstBinding(1)
+                    .dstArrayElement(0)
+                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .pImageInfo(imageInfo);
 
             vkUpdateDescriptorSets(device, writeDescriptor, null);
         }
     }
 
     private void createDescriptorPoll() {
-        VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.create(1)
+        VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.create(2);
+        poolSize.get(0)
                 .type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                .descriptorCount(swapChainImages.length);
+        poolSize.get(1)
+                .type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                 .descriptorCount(swapChainImages.length);
 
         VkDescriptorPoolCreateInfo poolCreateInfo = VkDescriptorPoolCreateInfo.create()
@@ -440,12 +456,19 @@ public class HelloTriangleApplication {
     }
 
     private void createDescriptorSetLayout() {
-        VkDescriptorSetLayoutBinding.Buffer layoutBinding = VkDescriptorSetLayoutBinding.create(1)
+        VkDescriptorSetLayoutBinding.Buffer layoutBinding = VkDescriptorSetLayoutBinding.create(2);
+        layoutBinding.get(0)
                 .binding(0)
                 .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
                 .descriptorCount(1)
                 .stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
                 .pImmutableSamplers(null);
+        layoutBinding.get(1)
+                .binding(1)
+                .descriptorCount(1)
+                .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                .pImmutableSamplers(null)
+                .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
         VkDescriptorSetLayoutCreateInfo layoutCreateInfo = VkDescriptorSetLayoutCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
