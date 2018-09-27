@@ -74,6 +74,8 @@ public class HelloTriangleApplication {
     private long commandPool;
     private long textureImage;
     private long textureImageMemory;
+    private long textureImageView;
+    private long textureSampler;
     private long vertexBuffer;
     private long vertexBufferMemory;
     private long indexBuffer;
@@ -121,6 +123,8 @@ public class HelloTriangleApplication {
         createFramebuffers();
         createCommandPoll();
         createTextureImage();
+        createTextureImageView();
+        createTextureSampler();
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
@@ -128,6 +132,58 @@ public class HelloTriangleApplication {
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    private void createTextureSampler() {
+        VkSamplerCreateInfo samplerCreateInfo = VkSamplerCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
+                .magFilter(VK_FILTER_LINEAR)
+                .minFilter(VK_FILTER_LINEAR)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .anisotropyEnable(true)
+                .maxAnisotropy(16)
+                .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK)
+                .unnormalizedCoordinates(false)
+                .compareEnable(false)
+                .compareOp(VK_COMPARE_OP_ALWAYS)
+                .mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
+                .mipLodBias(0f)
+                .minLod(0f)
+                .maxLod(0f);
+
+        LongBuffer pointer = BufferUtils.createLongBuffer(1);
+        int err = vkCreateSampler(device, samplerCreateInfo, null, pointer);
+        if(err != VK_SUCCESS){
+            throw new RuntimeException("Failed to create texture sampler: " + translateVulkanResult(err));
+        }
+        textureSampler = pointer.get(0);
+    }
+
+    private void createTextureImageView() {
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM);
+    }
+
+    private long createImageView(long image, int format) {
+        VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+                .image(image)
+                .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                .format(format);
+        viewInfo.subresourceRange()
+                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .baseMipLevel(0)
+                .levelCount(1)
+                .baseArrayLayer(0)
+                .layerCount(1);
+
+        LongBuffer pointer = BufferUtils.createLongBuffer(1);
+        int err = vkCreateImageView(device, viewInfo, null, pointer);
+        if (err != VK_SUCCESS) {
+            throw new RuntimeException("Failed to create texture image view");
+        }
+        return pointer.get(0);
     }
 
     private void copyBufferToImage(long buffer, long image, int width, int height){
@@ -244,7 +300,7 @@ public class HelloTriangleApplication {
         Pair<Long, Long> imageBuffer = createImage(
                 texWidth,
                 texHeight,
-                VK_FORMAT_B8G8R8A8_UNORM,
+                VK_FORMAT_R8G8B8A8_UNORM,
                 VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
@@ -895,32 +951,10 @@ public class HelloTriangleApplication {
     }
 
     private void createImageViews() {
-        long[] imageViews = new long[swapChainImages.length];
-        for (int i = 0; i < imageViews.length; i++) {
-            VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.create()
-                    .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
-                    .image(swapChainImages[i])
-                    .viewType(VK_IMAGE_VIEW_TYPE_2D)
-                    .format(swapChainImageFormat);
-            createInfo.components()
-                    .r(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    .g(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    .b(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    .a(VK_COMPONENT_SWIZZLE_IDENTITY);
-            createInfo.subresourceRange()
-                    .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                    .baseMipLevel(0)
-                    .levelCount(1)
-                    .baseArrayLayer(0)
-                    .layerCount(1);
-            LongBuffer pBufferView = BufferUtils.createLongBuffer(1);
-            int err = vkCreateImageView(device, createInfo, null, pBufferView);
-            imageViews[i] = pBufferView.get(0);
-            if (err != VK_SUCCESS) {
-                throw new AssertionError("Failed to create image view: " + translateVulkanResult(err));
-            }
+        swapChainImageViews = new long[swapChainImages.length];
+        for (int i = 0; i < swapChainImageViews.length; i++) {
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
         }
-        swapChainImageViews = imageViews;
     }
 
     private void createSwapChain() {
@@ -1023,7 +1057,8 @@ public class HelloTriangleApplication {
         }
         ppExtensionNames.flip();
 
-        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.create();
+        VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.create()
+                .samplerAnisotropy(true);
         VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
                 .pNext(NULL)
@@ -1081,7 +1116,7 @@ public class HelloTriangleApplication {
         indices = new QueueFamilyIndices(physicalDevice, surface);
 
         return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
-                && deviceFeatures.geometryShader()
+                && deviceFeatures.samplerAnisotropy()
                 && indices.isComplete()
                 && checkDeviceExtensionSupport(physicalDevice)
                 && swapChainGood;
@@ -1317,6 +1352,8 @@ public class HelloTriangleApplication {
             vkDestroyBuffer(device, uniformBuffers[i], null);
             vkFreeMemory(device, uniformBuffersMemory[i], null);
         }
+        vkDestroySampler(device, textureSampler, null);
+        vkDestroyImageView(device, textureImageView, null);
         vkDestroyImage(device, textureImage, null);
         vkFreeMemory(device, textureImageMemory, null);
         vkDestroyBuffer(device, vertexBuffer, null);
