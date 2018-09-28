@@ -9,6 +9,7 @@ import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 
+import static org.lwjgl.glfw.GLFW.glfwGetFramebufferSize;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.VK10.VK_FORMAT_B8G8R8A8_UNORM;
 import static org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED;
@@ -82,13 +83,17 @@ public class SwapChainSupportDetails {
         return bestMode;
     }
 
-    VkExtent2D chooseSwapExtent() {
+    VkExtent2D chooseSwapExtent(long window) {
         if(capabilities.currentExtent().width() != Integer.MAX_VALUE){
             return capabilities.currentExtent();
         }else {
-            VkExtent2D actualExtent = VkExtent2D.calloc()
-                    .height(HelloTriangleApplication.HEIGHT)
-                    .width(HelloTriangleApplication.WIDTH);
+            IntBuffer width = BufferUtils.createIntBuffer(1);
+            IntBuffer height = BufferUtils.createIntBuffer(1);
+            glfwGetFramebufferSize(window, width, height);
+
+            VkExtent2D actualExtent = VkExtent2D.create()
+                    .width(width.get())
+                    .height(height.get());
             actualExtent.width(Math.max(capabilities.maxImageExtent().width(), Math.min(capabilities.maxImageExtent().width(), actualExtent.width())));
             actualExtent.height(Math.max(capabilities.minImageExtent().height(), Math.min(capabilities.maxImageExtent().height(), actualExtent.height())));
             return actualExtent;

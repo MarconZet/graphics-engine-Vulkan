@@ -4,6 +4,8 @@ import javafx.util.Pair;
 import org.joml.Matrix4f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
+import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
+import org.lwjgl.glfw.GLFWWindowSizeCallback;
 import org.lwjgl.vulkan.*;
 
 import java.io.IOException;
@@ -49,6 +51,8 @@ public class HelloTriangleApplication {
 
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private int currentFrame = 0;
+
+    boolean framebufferResized = false;
 
     private long window;
     private VkInstance instance;
@@ -104,9 +108,17 @@ public class HelloTriangleApplication {
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", 0, 0);
+
+        GLFWFramebufferSizeCallback callback = new GLFWFramebufferSizeCallback() {
+            @Override
+            public void invoke(long window, int width, int height) {
+                framebufferResized = true;
+            }
+        };
+        glfwSetFramebufferSizeCallback(window, callback);
     }
 
     private void initVulkan() {
@@ -1073,7 +1085,7 @@ public class HelloTriangleApplication {
 
         VkSurfaceFormatKHR surfaceFormat = swapChainSupport.chooseSwapSurfaceFormat();
         int presentMode = swapChainSupport.chooseSwapPresentMode();
-        swapChainExtent = swapChainSupport.chooseSwapExtent();
+        swapChainExtent = swapChainSupport.chooseSwapExtent(window);
         swapChainImageFormat = surfaceFormat.format();
 
         int imageCount = swapChainSupport.getCapabilities().minImageCount() + 1;
@@ -1388,7 +1400,10 @@ public class HelloTriangleApplication {
 
         IntBuffer pointer = BufferUtils.createIntBuffer(1);
         int err = vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pointer);
-        if(err!= VK_SUCCESS){
+        if(err == VK_ERROR_OUT_OF_DATE_KHR){
+            recreateSwapChain();
+            return;
+        } else if(err != VK_SUCCESS && err != VK_SUBOPTIMAL_KHR){
             throw new RuntimeException(translateVulkanResult(err));
         }
         int imageIndex = pointer.get(0);
@@ -1420,7 +1435,12 @@ public class HelloTriangleApplication {
 
         err = vkQueuePresentKHR(presentQueue, presentInfo);
 
-        vkQueueWaitIdle(presentQueue);
+        if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR || framebufferResized) {
+            framebufferResized = false;
+            recreateSwapChain();
+        } else if (err != VK_SUCCESS) {
+            throw new RuntimeException("Failed to present swap chain image: " + translateVulkanResult(err));
+        }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 
@@ -1450,11 +1470,19 @@ public class HelloTriangleApplication {
     }
 
     void recreateSwapChain() {
+        IntBuffer width = BufferUtils.createIntBuffer(1);
+        IntBuffer height = BufferUtils.createIntBuffer(1);
+        while (width.get(0) == 0 || height.get(0) == 0) {
+            glfwGetFramebufferSize(window, width, height);
+            glfwWaitEvents();
+        }
+
         vkDeviceWaitIdle(device);
 
         cleanupSwapChain();
 
         createSwapChain();
+        getSwapChainImages();
         createImageViews();
         createRenderPass();
         createGraphicsPipeline();
