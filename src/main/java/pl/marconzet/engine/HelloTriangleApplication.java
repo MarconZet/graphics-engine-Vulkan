@@ -5,7 +5,6 @@ import org.joml.Matrix4f;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
-import org.lwjgl.glfw.GLFWWindowSizeCallback;
 import org.lwjgl.vulkan.*;
 
 import java.io.IOException;
@@ -47,7 +46,7 @@ public class HelloTriangleApplication {
     public static final int HEIGHT = 600;
 
     private static long startTime;
-    private Model rectangle = new Model();
+    private Model model = ObjFile.read(HelloTriangleApplication.class.getResourceAsStream("dragon.obj"), true).toModel();
 
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private int currentFrame = 0;
@@ -354,7 +353,8 @@ public class HelloTriangleApplication {
             throw new RuntimeException("Failed ot load texture image");
         }
 
-        Pair<Long, Long> buffer = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        Pair<Long, Long> buffer;
+        buffer = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         long stagingBuffer = buffer.getKey();
         long stagingBufferMemory = buffer.getValue();
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
@@ -513,11 +513,8 @@ public class HelloTriangleApplication {
         uniformBuffersMemory = new long[swapChainImages.length];
 
         for (int i = 0; i < swapChainImages.length; i++) {
-            Pair<Long, Long> buffer = createBuffer(
-                    bufferSize,
-                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-            );
+            Pair<Long, Long> buffer;
+            buffer = createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
             uniformBuffers[i] = buffer.getKey();
             uniformBuffersMemory[i] = buffer.getValue();
         }
@@ -551,26 +548,19 @@ public class HelloTriangleApplication {
     }
 
     private void createIndexBuffer() {
-        long bufferSize = rectangle.indices.remaining();
-        Pair<Long, Long> buffer = createBuffer(
-                bufferSize,
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        );
+        long bufferSize = model.indices.remaining();
+        Pair<Long, Long> buffer;
+        buffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         long stagingBuffer = buffer.getKey();
         long stagingBufferMemory = buffer.getValue();
 
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, pData);
         long data = pData.get(0);
-        memCopy(memAddress(rectangle.indices), data, bufferSize);
+        memCopy(memAddress(model.indices), data, bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
-        buffer = createBuffer(
-                bufferSize,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-        );
+        buffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         indexBuffer = buffer.getKey();
         indexBufferMemory = buffer.getValue();
 
@@ -581,26 +571,19 @@ public class HelloTriangleApplication {
     }
 
     private void createVertexBuffer() {
-        long bufferSize = rectangle.vertices.remaining();
-        Pair<Long, Long> buffer = createBuffer(
-                bufferSize,
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        );
+        long bufferSize = model.vertices.remaining();
+        Pair<Long, Long> buffer;
+        buffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         long stagingBuffer = buffer.getKey();
         long stagingBufferMemory = buffer.getValue();
 
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, pData);
         long data = pData.get(0);
-        memCopy(memAddress(rectangle.vertices), data, bufferSize);
+        memCopy(memAddress(model.vertices), data, bufferSize);
         vkUnmapMemory(device, stagingBufferMemory);
 
-        buffer = createBuffer(
-                bufferSize,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-        );
+        buffer = createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         vertexBuffer = buffer.getKey();
         vertexBufferMemory = buffer.getValue();
 
@@ -787,7 +770,7 @@ public class HelloTriangleApplication {
             LongBuffer descriptorSet = BufferUtils.createLongBuffer(1).put(0, descriptorSets[i]);
             vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, descriptorSet, null);
 
-            vkCmdDrawIndexed(commandBuffers[i], rectangle.getIndex().length, 1, 0, 0, 0);
+            vkCmdDrawIndexed(commandBuffers[i], model.getIndexLength(), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffers[i]);
 
@@ -914,8 +897,8 @@ public class HelloTriangleApplication {
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
                 .pNext(NULL)
-                .pVertexBindingDescriptions(rectangle.getBindingDescription())
-                .pVertexAttributeDescriptions(rectangle.getAttributeDescriptions());
+                .pVertexBindingDescriptions(model.getBindingDescription())
+                .pVertexAttributeDescriptions(model.getAttributeDescriptions());
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
@@ -1451,12 +1434,12 @@ public class HelloTriangleApplication {
         float time = currentTime - startTime;
         time /= 1000;
 
-        Matrix4f transformation = new Matrix4f().translate(0, 0, 1).rotateZ(time * (float)Math.PI/2);
-        Matrix4f view = new Matrix4f().translate(0f, -0.7f, 0.2f).rotateX(-(float)Math.PI/4);
+        Matrix4f transformation = new Matrix4f().rotateY(time * (float)Math.PI/8).rotateZ((float)Math.PI);
+        Matrix4f view = new Matrix4f().translate(0f, 3.5f, 10f);
         Matrix4f projection = new Matrix4f().perspectiveLH(
                 (float)Math.PI/2,
                 (float)swapChainExtent.width()/swapChainExtent.height(),
-                0.1f, 10f);
+                0.1f, 1000f);
 
         UniformBufferObject ubo = new UniformBufferObject(transformation, view, projection);
         //ubo = new UniformBufferObject(new Matrix4f(), new Matrix4f(), new Matrix4f());

@@ -16,24 +16,20 @@ public class Model {
     public ByteBuffer vertices;
     public ByteBuffer indices;
 
-    Vertex[] model = {
-            new Vertex(-0.5f, -0.5f, 0.0f, 0.0f, 0.0f),
-            new Vertex(0.5f, -0.5f, 0.0f, 1.0f, 0.0f),
-            new Vertex(0.5f, 0.5f, 0.0f, 1.0f, 1.0f),
-            new Vertex(-0.5f, 0.5f, 0.0f, 0.0f, 1.0f),
+    private Vertex[] model;
+    private int[] index;
 
-            new Vertex(-0.5f, -0.5f, 1.0f, 0.0f, 0.0f),
-            new Vertex(0.5f, -0.5f, 1.0f, 1.0f, 0.0f),
-            new Vertex(0.5f, 0.5f, 1.0f, 1.0f, 1.0f),
-            new Vertex(-0.5f, 0.5f, 1.0f, 0.0f, 1.0f)
-    };
+    public Model(float[] v, float[] t, int[] indices, int size){
+        index = indices;
+        model = new Vertex[size];
+        int j = 0, k = 0;
+        for (int i = 0; i < size; i++) {
+            model[i] = new Vertex(v[j++],v[j++],v[j++],t[k++],t[k++]);
+        }
+        fillBuffers();
+    }
 
-    private int[] index = {
-            0, 1, 2, 2, 3, 0,
-            4, 5, 6, 6, 7, 4
-    };
-
-    public Model() {
+    private void fillBuffers() {
         vertices = BufferUtils.createByteBuffer(model.length * model[0].sizeOf());
         FloatBuffer fb = vertices.asFloatBuffer();
         for (Vertex vertex : model) {
@@ -76,7 +72,7 @@ public class Model {
         return attributeDescriptions;
     }
 
-    public int[] getIndex() {
-        return index;
+    public int getIndexLength() {
+        return index.length;
     }
 }
