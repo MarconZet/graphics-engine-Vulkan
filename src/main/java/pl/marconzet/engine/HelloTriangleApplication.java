@@ -72,6 +72,9 @@ public class HelloTriangleApplication {
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
     private long commandPool;
+    private long depthImage;
+    private long depthImageMemory;
+    private long depthImageView;
     private long textureImage;
     private long textureImageMemory;
     private long textureImageView;
@@ -120,8 +123,9 @@ public class HelloTriangleApplication {
         createRenderPass();
         createDescriptorSetLayout();
         createGraphicsPipeline();
-        createFramebuffers();
         createCommandPoll();
+        createDepthResources();
+        createFramebuffers();
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
@@ -132,6 +136,42 @@ public class HelloTriangleApplication {
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    private void createDepthResources() {
+        int depthFormat = findDepthFormat();
+        Pair<Long, Long> image = createImage(swapChainExtent.width(), swapChainExtent.height(), depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        depthImage = image.getKey();
+        depthImageMemory = image.getValue();
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    }
+
+    private int findDepthFormat() {
+        return findSupportedFormat(
+                new int[]{VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+        );
+    }
+
+    private boolean hasStencilComponent(long format) {
+        return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+    }
+
+    private int findSupportedFormat(int[] candidates, int tiling, int features) {
+        for (int format : candidates) {
+            VkFormatProperties props = VkFormatProperties.create();
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, props);
+
+            if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures() & features) == features) {
+                return format;
+            } else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures() & features) == features) {
+                return format;
+            }
+        }
+
+        throw new RuntimeException("Failed to find supported format");
     }
 
     private void createTextureSampler() {
@@ -162,17 +202,17 @@ public class HelloTriangleApplication {
     }
 
     private void createTextureImageView() {
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM);
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
-    private long createImageView(long image, int format) {
+    private long createImageView(long image, int format, int aspectFlags) {
         VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
                 .image(image)
                 .viewType(VK_IMAGE_VIEW_TYPE_2D)
                 .format(format);
         viewInfo.subresourceRange()
-                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .aspectMask(aspectFlags)
                 .baseMipLevel(0)
                 .levelCount(1)
                 .baseArrayLayer(0)
@@ -219,8 +259,19 @@ public class HelloTriangleApplication {
                 .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                 .image(image);
 
+        int aspectMask;
+        if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+            if (hasStencilComponent(format)) {
+                aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+        } else {
+            aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+
         barrier.subresourceRange()
-                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .aspectMask(aspectMask)
                 .baseMipLevel(0)
                 .levelCount(1)
                 .baseArrayLayer(0)
@@ -241,6 +292,11 @@ public class HelloTriangleApplication {
 
             sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
             destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask(0).dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         } else {
             throw new RuntimeException("Unsupported layout transition");
         }
@@ -688,12 +744,14 @@ public class HelloTriangleApplication {
                 throw new RuntimeException("Failed to begin recording command buffer: " + translateVulkanResult(err));
             }
 
-            VkClearValue.Buffer clearValues = VkClearValue.create(1);
-            clearValues.color()
+            VkClearValue.Buffer clearValues = VkClearValue.create(2);
+            clearValues.get(0).color()
                     .float32(0, 100 / 255.0f)
                     .float32(1, 149 / 255.0f)
                     .float32(2, 237 / 255.0f)
                     .float32(3, 1.0f);
+
+            clearValues.get(1).depthStencil().set(1.0f, 0);
 
             VkRenderPassBeginInfo renderPassBeginInfo = VkRenderPassBeginInfo.create()
                     .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
@@ -749,7 +807,9 @@ public class HelloTriangleApplication {
     private void createFramebuffers() {
         long[] framebuffers = new long[swapChainImageViews.length];
         for (int i = 0; i < swapChainImageViews.length; i++) {
-            LongBuffer attachments = BufferUtils.createLongBuffer(1).put(swapChainImageViews[i]);
+            LongBuffer attachments = BufferUtils.createLongBuffer(2)
+                    .put(swapChainImageViews[i])
+                    .put(depthImageView);
             attachments.flip();
 
             VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.create()
@@ -771,7 +831,9 @@ public class HelloTriangleApplication {
     }
 
     private void createRenderPass() {
-        VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.create(1)
+        VkAttachmentDescription.Buffer attachmentDescriptions = VkAttachmentDescription.create(2);
+
+        attachmentDescriptions.get(0)
                 .format(swapChainImageFormat)
                 .samples(VK_SAMPLE_COUNT_1_BIT)
                 .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
@@ -781,14 +843,29 @@ public class HelloTriangleApplication {
                 .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
                 .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
+        attachmentDescriptions.get(1)
+                .format(findDepthFormat())
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+                .storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_LOAD)
+                .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                .finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
         VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.create(1)
                 .attachment(0)
                 .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
+        VkAttachmentReference depthAttachmentRef = VkAttachmentReference.create()
+                .attachment(1)
+                .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
         VkSubpassDescription.Buffer subpass = VkSubpassDescription.create(1)
                 .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
                 .colorAttachmentCount(1)
-                .pColorAttachments(colorAttachmentRef);
+                .pColorAttachments(colorAttachmentRef)
+                .pDepthStencilAttachment(depthAttachmentRef);
 
         VkSubpassDependency.Buffer dependency = VkSubpassDependency.create(1)
                 .srcSubpass(VK_SUBPASS_EXTERNAL)
@@ -800,8 +877,9 @@ public class HelloTriangleApplication {
 
         VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
-                .pAttachments(colorAttachment)
-                .pSubpasses(subpass).pDependencies(dependency);
+                .pAttachments(attachmentDescriptions)
+                .pSubpasses(subpass)
+                .pDependencies(dependency);
 
         LongBuffer pRenderPass = BufferUtils.createLongBuffer(1);
         int err = vkCreateRenderPass(device, renderPassInfo, null, pRenderPass);
@@ -880,6 +958,16 @@ public class HelloTriangleApplication {
                 .alphaToCoverageEnable(false)
                 .alphaToOneEnable(false);
 
+        VkPipelineDepthStencilStateCreateInfo depthStencil = VkPipelineDepthStencilStateCreateInfo.create()
+                .sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+                .depthTestEnable(true)
+                .depthWriteEnable(true)
+                .depthCompareOp(VK_COMPARE_OP_LESS)
+                .depthBoundsTestEnable(false)
+                .minDepthBounds(0.0f)
+                .maxDepthBounds(1.0f)
+                .stencilTestEnable(false);
+
         VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.create(1)
                 .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
                 .blendEnable(false)
@@ -927,7 +1015,7 @@ public class HelloTriangleApplication {
                 .pViewportState(viewportState)
                 .pRasterizationState(rasterizer)
                 .pMultisampleState(multisampling)
-                .pDepthStencilState(null)
+                .pDepthStencilState(depthStencil)
                 .pColorBlendState(colorBlending)
                 .pDynamicState(dynamicState)
                 .layout(pipelineLayout)
@@ -976,7 +1064,7 @@ public class HelloTriangleApplication {
     private void createImageViews() {
         swapChainImageViews = new long[swapChainImages.length];
         for (int i = 0; i < swapChainImageViews.length; i++) {
-            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
         }
     }
 
@@ -1299,7 +1387,10 @@ public class HelloTriangleApplication {
         vkResetFences(device, inFlightFences[currentFrame]);
 
         IntBuffer pointer = BufferUtils.createIntBuffer(1);
-        vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pointer);
+        int err = vkAcquireNextImageKHR(device, swapChain, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pointer);
+        if(err!= VK_SUCCESS){
+            throw new RuntimeException(translateVulkanResult(err));
+        }
         int imageIndex = pointer.get(0);
 
         updateUniformBuffer(imageIndex);
@@ -1315,7 +1406,7 @@ public class HelloTriangleApplication {
                 .pCommandBuffers(BufferUtils.createPointerBuffer(1).put(0, commandBuffers[imageIndex]))
                 .pSignalSemaphores(signalSemaphores);
 
-        int err = vkQueueSubmit(graphicsQueue, submitInfo, inFlightFences[currentFrame]);
+        err = vkQueueSubmit(graphicsQueue, submitInfo, inFlightFences[currentFrame]);
         if (err != VK_SUCCESS) {
             throw new RuntimeException("Failed to submit draw command buffer: " + translateVulkanResult(err));
         }
@@ -1358,6 +1449,43 @@ public class HelloTriangleApplication {
 
     }
 
+    void recreateSwapChain() {
+        vkDeviceWaitIdle(device);
+
+        cleanupSwapChain();
+
+        createSwapChain();
+        createImageViews();
+        createRenderPass();
+        createGraphicsPipeline();
+        createDepthResources();
+        createFramebuffers();
+        createCommandBuffers();
+    }
+
+    private void cleanupSwapChain() {
+        vkDestroyImageView(device, depthImageView, null);
+        vkDestroyImage(device, depthImage, null);
+        vkFreeMemory(device, depthImageMemory, null);
+
+        for (long framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, null);
+        }
+        PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(commandBuffers.length);
+        for (VkCommandBuffer commandBuffer : commandBuffers) {
+            pointerBuffer.put(commandBuffer);
+        }
+        pointerBuffer.flip();
+        vkFreeCommandBuffers(device, commandPool, pointerBuffer);
+        vkDestroyPipeline(device, graphicsPipeline, null);
+        vkDestroyPipelineLayout(device, pipelineLayout, null);
+        vkDestroyRenderPass(device, renderPass, null);
+        for (long imageView : swapChainImageViews) {
+            vkDestroyImageView(device, imageView, null);
+        }
+        vkDestroySwapchainKHR(device, swapChain, null);
+    }
+
     private void cleanup() {
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, renderFinishedSemaphore[i], null);
@@ -1390,24 +1518,5 @@ public class HelloTriangleApplication {
         vkDestroyInstance(instance, null);
         glfwDestroyWindow(window);
         glfwTerminate();
-    }
-
-    private void cleanupSwapChain() {
-        for (long framebuffer : swapChainFramebuffers) {
-            vkDestroyFramebuffer(device, framebuffer, null);
-        }
-        PointerBuffer pointerBuffer = BufferUtils.createPointerBuffer(commandBuffers.length);
-        for (VkCommandBuffer commandBuffer : commandBuffers) {
-            pointerBuffer.put(commandBuffer);
-        }
-        pointerBuffer.flip();
-        vkFreeCommandBuffers(device, commandPool, pointerBuffer);
-        vkDestroyPipeline(device, graphicsPipeline, null);
-        vkDestroyPipelineLayout(device, pipelineLayout, null);
-        vkDestroyRenderPass(device, renderPass, null);
-        for (long imageView : swapChainImageViews) {
-            vkDestroyImageView(device, imageView, null);
-        }
-        vkDestroySwapchainKHR(device, swapChain, null);
     }
 }
