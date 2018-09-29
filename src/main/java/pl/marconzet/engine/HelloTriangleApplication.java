@@ -78,6 +78,7 @@ public class HelloTriangleApplication {
     private long depthImage;
     private long depthImageMemory;
     private long depthImageView;
+    private int mipLevels;
     private long textureImage;
     private long textureImageMemory;
     private long textureImageView;
@@ -151,11 +152,11 @@ public class HelloTriangleApplication {
 
     private void createDepthResources() {
         int depthFormat = findDepthFormat();
-        Pair<Long, Long> image = createImage(swapChainExtent.width(), swapChainExtent.height(), depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        Pair<Long, Long> image = createImage(swapChainExtent.width(), swapChainExtent.height(), depthFormat, 1, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         depthImage = image.getKey();
         depthImageMemory = image.getValue();
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
-        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
     }
 
     private int findDepthFormat() {
@@ -200,9 +201,9 @@ public class HelloTriangleApplication {
                 .compareEnable(false)
                 .compareOp(VK_COMPARE_OP_ALWAYS)
                 .mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
-                .mipLodBias(0f)
                 .minLod(0f)
-                .maxLod(0f);
+                .maxLod((float)mipLevels)
+                .mipLodBias(0f);
 
         LongBuffer pointer = BufferUtils.createLongBuffer(1);
         int err = vkCreateSampler(device, samplerCreateInfo, null, pointer);
@@ -213,10 +214,10 @@ public class HelloTriangleApplication {
     }
 
     private void createTextureImageView() {
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
     }
 
-    private long createImageView(long image, int format, int aspectFlags) {
+    private long createImageView(long image, int format, int aspectFlags, int mipLevels) {
         VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
                 .image(image)
@@ -225,7 +226,7 @@ public class HelloTriangleApplication {
         viewInfo.subresourceRange()
                 .aspectMask(aspectFlags)
                 .baseMipLevel(0)
-                .levelCount(1)
+                .levelCount(mipLevels)
                 .baseArrayLayer(0)
                 .layerCount(1);
 
@@ -259,7 +260,7 @@ public class HelloTriangleApplication {
         endSingleTimeCommands(commandBuffer);
     }
 
-    private void transitionImageLayout(long image, long format, int oldLayout, int newLayout) {
+    private void transitionImageLayout(long image, long format, int oldLayout, int newLayout, int mipLevels) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
         VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.create(1)
@@ -284,7 +285,7 @@ public class HelloTriangleApplication {
         barrier.subresourceRange()
                 .aspectMask(aspectMask)
                 .baseMipLevel(0)
-                .levelCount(1)
+                .levelCount(mipLevels)
                 .baseArrayLayer(0)
                 .layerCount(1);
 
@@ -352,6 +353,7 @@ public class HelloTriangleApplication {
         if(pixels == null){
             throw new RuntimeException("Failed ot load texture image");
         }
+        mipLevels = (int)Math.floor(Math.log((double)Math.max(texWidth, texHeight))/Math.log(2));
 
         Pair<Long, Long> buffer;
         buffer = createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -369,26 +371,124 @@ public class HelloTriangleApplication {
                 texWidth,
                 texHeight,
                 VK_FORMAT_R8G8B8A8_UNORM,
+                mipLevels,
                 VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
         );
         textureImage = imageBuffer.getKey();
         textureImageMemory = imageBuffer.getValue();
 
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
         copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        //transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevels);
+        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_UNORM, texWidth, texHeight, mipLevels);
 
         vkDestroyBuffer(device, stagingBuffer, null);
         vkFreeMemory(device, stagingBufferMemory, null);
     }
 
-    private Pair<Long, Long> createImage(int width, int height, int format, int tilting, int usage, int properties) {
+    private void generateMipmaps(long image, int imageFormat, int texWidth, int texHeight, int mipLevels){
+        VkFormatProperties formatProperties = VkFormatProperties.create();
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, formatProperties);
+        if (!((formatProperties.optimalTilingFeatures() & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)>0)) {
+            throw new RuntimeException("Texture image format does not support linear blitting");
+        }
+
+
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+        VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.create(1)
+                .sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
+                .image(image)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        barrier.subresourceRange()
+                .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .baseArrayLayer(0)
+                .layerCount(1)
+                .levelCount(1);
+
+        int mipWidth = texWidth;
+        int mipHeight = texHeight;
+
+        for (int i = 1; i < mipLevels; i++) {
+            barrier.subresourceRange().baseMipLevel(i-1);
+            barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+                    .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+
+            vkCmdPipelineBarrier(commandBuffer,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0,
+                    null,
+                    null,
+                    barrier);
+
+            VkOffset3D.Buffer srcOffsets = VkOffset3D.create(2);
+            srcOffsets.get(0).set(0, 0, 0);
+            srcOffsets.get(1).set(mipWidth, mipHeight, 1);
+            VkOffset3D.Buffer dstOffsets = VkOffset3D.create(2);
+            dstOffsets.get(0).set(0,0,0);
+            dstOffsets.get(1).set(mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1);
+            VkImageSubresourceLayers subresource = VkImageSubresourceLayers.create()
+                    .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    .mipLevel(i - 1)
+                    .baseArrayLayer(0)
+                    .layerCount(1);
+            VkImageBlit.Buffer blit = VkImageBlit.create(1)
+                    .srcOffsets(srcOffsets)
+                    .srcSubresource(subresource)
+                    .dstOffsets(dstOffsets)
+                    .dstSubresource(subresource.mipLevel(i));
+
+            vkCmdBlitImage(commandBuffer,
+                    image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    blit,
+                    VK_FILTER_LINEAR);
+
+            barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+                    .newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .srcAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
+                    .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+
+            vkCmdPipelineBarrier(commandBuffer,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    0,
+                    null,
+                    null,
+                    barrier);
+
+            if (mipWidth > 1) mipWidth /= 2;
+            if (mipHeight > 1) mipHeight /= 2;
+        }
+
+        barrier.subresourceRange().baseMipLevel(mipLevels-1);
+        barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                .dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+
+        vkCmdPipelineBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                null,
+                null,
+                barrier);
+
+        endSingleTimeCommands(commandBuffer);
+    }
+
+    private Pair<Long, Long> createImage(int width, int height, int format, int mipLevels, int tilting, int usage, int properties) {
         VkImageCreateInfo imageCreateInfo = VkImageCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
                 .imageType(VK_IMAGE_TYPE_2D)
-                .mipLevels(1)
+                .mipLevels(mipLevels)
                 .arrayLayers(1)
                 .format(format)
                 .tiling(tilting)
@@ -1059,7 +1159,7 @@ public class HelloTriangleApplication {
     private void createImageViews() {
         swapChainImageViews = new long[swapChainImages.length];
         for (int i = 0; i < swapChainImageViews.length; i++) {
-            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
         }
     }
 
