@@ -45,13 +45,14 @@ public class HelloTriangleApplication {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 600;
 
-    private static long startTime;
-    private Model model = ObjFile.read(HelloTriangleApplication.class.getResourceAsStream("dragon.obj"), true).toModel();
+    public Model model;
+    public String textureName;
 
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private int currentFrame = 0;
+    private static long startTime;
 
-    boolean framebufferResized = false;
+    private boolean framebufferResized = false;
 
     private long window;
     private VkInstance instance;
@@ -75,6 +76,10 @@ public class HelloTriangleApplication {
     private long graphicsPipeline;
     private long[] swapChainFramebuffers;
     private long commandPool;
+    private int msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+    private long colorImage;
+    private long colorImageMemory;
+    private long colorImageView;
     private long depthImage;
     private long depthImageMemory;
     private long depthImageView;
@@ -136,6 +141,7 @@ public class HelloTriangleApplication {
         createDescriptorSetLayout();
         createGraphicsPipeline();
         createCommandPoll();
+        createColorResources();
         createDepthResources();
         createFramebuffers();
         createTextureImage();
@@ -150,9 +156,32 @@ public class HelloTriangleApplication {
         createSyncObjects();
     }
 
+    private void createColorResources(){
+        int colorFormat = swapChainImageFormat;
+
+        Pair<Long, Long> image = createImage(swapChainExtent.width(), swapChainExtent.height(), 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        colorImage = image.getKey();
+        colorImageMemory = image.getValue();
+        colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        transitionImageLayout(colorImage, colorFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+    }
+
+    private int getMaxUsableSampleCount(VkPhysicalDeviceProperties deviceProperties) {
+        int counts = Math.min(deviceProperties.limits().framebufferColorSampleCounts(), deviceProperties.limits().framebufferDepthSampleCounts());
+        if (0 < (counts & VK_SAMPLE_COUNT_64_BIT)) { return VK_SAMPLE_COUNT_64_BIT; }
+        if (0 < (counts & VK_SAMPLE_COUNT_32_BIT)) { return VK_SAMPLE_COUNT_32_BIT; }
+        if (0 < (counts & VK_SAMPLE_COUNT_16_BIT)) { return VK_SAMPLE_COUNT_16_BIT; }
+        if (0 < (counts & VK_SAMPLE_COUNT_8_BIT)) { return VK_SAMPLE_COUNT_8_BIT; }
+        if (0 < (counts & VK_SAMPLE_COUNT_4_BIT)) { return VK_SAMPLE_COUNT_4_BIT; }
+        if (0 < (counts & VK_SAMPLE_COUNT_2_BIT)) { return VK_SAMPLE_COUNT_2_BIT; }
+
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
     private void createDepthResources() {
         int depthFormat = findDepthFormat();
-        Pair<Long, Long> image = createImage(swapChainExtent.width(), swapChainExtent.height(), depthFormat, 1, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        Pair<Long, Long> image;
+        image = createImage(swapChainExtent.width(), swapChainExtent.height(), 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         depthImage = image.getKey();
         depthImageMemory = image.getValue();
         depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
@@ -296,19 +325,20 @@ public class HelloTriangleApplication {
 
         if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
             barrier.srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
-
             sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
             barrier.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
-
             sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
             destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
             barrier.srcAccessMask(0).dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
             sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask(0).dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         } else {
             throw new RuntimeException("Unsupported layout transition");
         }
@@ -344,7 +374,8 @@ public class HelloTriangleApplication {
         for (int i = 0; i < textureInfo.length; i++) {
             textureInfo[i] = BufferUtils.createIntBuffer(1);
         }
-        String path = HelloTriangleApplication.class.getResource("jp2.png").getFile().substring(1);
+
+        String path = HelloTriangleApplication.class.getResource(textureName).getFile().substring(1);
         ByteBuffer pixels = stbi_load(path, textureInfo[0], textureInfo[1], textureInfo[2], STBI_rgb_alpha);
         int texWidth = textureInfo[0].get();
         int texHeight = textureInfo[1].get();
@@ -370,8 +401,7 @@ public class HelloTriangleApplication {
         Pair<Long, Long> imageBuffer = createImage(
                 texWidth,
                 texHeight,
-                VK_FORMAT_R8G8B8A8_UNORM,
-                mipLevels,
+                mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM,
                 VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
@@ -484,7 +514,7 @@ public class HelloTriangleApplication {
         endSingleTimeCommands(commandBuffer);
     }
 
-    private Pair<Long, Long> createImage(int width, int height, int format, int mipLevels, int tilting, int usage, int properties) {
+    private Pair<Long, Long> createImage(int width, int height, int mipLevels, int numSamples, int format, int tilting, int usage, int properties) {
         VkImageCreateInfo imageCreateInfo = VkImageCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
                 .imageType(VK_IMAGE_TYPE_2D)
@@ -495,7 +525,7 @@ public class HelloTriangleApplication {
                 .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
                 .usage(usage)
                 .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
-                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .samples(numSamples)
                 .flags(0);
 
         imageCreateInfo.extent()
@@ -902,9 +932,10 @@ public class HelloTriangleApplication {
     private void createFramebuffers() {
         long[] framebuffers = new long[swapChainImageViews.length];
         for (int i = 0; i < swapChainImageViews.length; i++) {
-            LongBuffer attachments = BufferUtils.createLongBuffer(2)
-                    .put(swapChainImageViews[i])
-                    .put(depthImageView);
+            LongBuffer attachments = BufferUtils.createLongBuffer(3)
+                    .put(colorImageView)
+                    .put(depthImageView)
+                    .put(swapChainImageViews[i]);
             attachments.flip();
 
             VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.create()
@@ -926,27 +957,37 @@ public class HelloTriangleApplication {
     }
 
     private void createRenderPass() {
-        VkAttachmentDescription.Buffer attachmentDescriptions = VkAttachmentDescription.create(2);
+        VkAttachmentDescription.Buffer attachmentDescriptions = VkAttachmentDescription.create(3);
 
         attachmentDescriptions.get(0)
                 .format(swapChainImageFormat)
-                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .samples(msaaSamples)
                 .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
                 .storeOp(VK_ATTACHMENT_STORE_OP_STORE)
                 .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
                 .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                 .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
-                .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                .finalLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         attachmentDescriptions.get(1)
                 .format(findDepthFormat())
-                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .samples(msaaSamples)
                 .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
                 .storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                 .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_LOAD)
                 .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                 .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
                 .finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        attachmentDescriptions.get(2)
+                .format(swapChainImageFormat)
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                .storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.create(1)
                 .attachment(0)
@@ -956,9 +997,14 @@ public class HelloTriangleApplication {
                 .attachment(1)
                 .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
+        VkAttachmentReference.Buffer colorAttachmentResolveRef = VkAttachmentReference.create(1)
+                .attachment(2)
+                .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
         VkSubpassDescription.Buffer subpass = VkSubpassDescription.create(1)
                 .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
                 .colorAttachmentCount(1)
+                .pResolveAttachments(colorAttachmentResolveRef)
                 .pColorAttachments(colorAttachmentRef)
                 .pDepthStencilAttachment(depthAttachmentRef);
 
@@ -1046,9 +1092,9 @@ public class HelloTriangleApplication {
         VkPipelineMultisampleStateCreateInfo multisampling = VkPipelineMultisampleStateCreateInfo.create()
                 .pNext(NULL)
                 .sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
-                .sampleShadingEnable(false)
-                .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
-                .minSampleShading(1.0f)
+                .sampleShadingEnable(true)
+                .rasterizationSamples(msaaSamples)
+                .minSampleShading(0.2f)
                 .pSampleMask(null)
                 .alphaToCoverageEnable(false)
                 .alphaToOneEnable(false);
@@ -1264,7 +1310,8 @@ public class HelloTriangleApplication {
         ppExtensionNames.flip();
 
         VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.create()
-                .samplerAnisotropy(true);
+                .samplerAnisotropy(true)
+                .sampleRateShading(true);
         VkDeviceCreateInfo pCreateInfo = VkDeviceCreateInfo.create()
                 .sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
                 .pNext(NULL)
@@ -1320,6 +1367,7 @@ public class HelloTriangleApplication {
 
 
         indices = new QueueFamilyIndices(physicalDevice, surface);
+        msaaSamples = getMaxUsableSampleCount(deviceProperties);
 
         return deviceProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
                 && deviceFeatures.samplerAnisotropy()
@@ -1534,15 +1582,14 @@ public class HelloTriangleApplication {
         float time = currentTime - startTime;
         time /= 1000;
 
-        Matrix4f transformation = new Matrix4f().rotateY(time * (float)Math.PI/8).rotateZ((float)Math.PI);
-        Matrix4f view = new Matrix4f().translate(0f, 3.5f, 10f);
+        Matrix4f transformation = new Matrix4f().rotateX((float)Math.PI).translate(0f, -5f, 0f);
+        Matrix4f view = new Matrix4f().translate(0f, 0f, 10f);
         Matrix4f projection = new Matrix4f().perspectiveLH(
                 (float)Math.PI/2,
                 (float)swapChainExtent.width()/swapChainExtent.height(),
                 0.1f, 1000f);
 
         UniformBufferObject ubo = new UniformBufferObject(transformation, view, projection);
-        //ubo = new UniformBufferObject(new Matrix4f(), new Matrix4f(), new Matrix4f());
 
         PointerBuffer pData = BufferUtils.createPointerBuffer(1);
         vkMapMemory(device, uniformBuffersMemory[currentImage], 0, ubo.sizeOf(), 0, pData);
@@ -1569,12 +1616,17 @@ public class HelloTriangleApplication {
         createImageViews();
         createRenderPass();
         createGraphicsPipeline();
+        createColorResources();
         createDepthResources();
         createFramebuffers();
         createCommandBuffers();
     }
 
     private void cleanupSwapChain() {
+        vkDestroyImageView(device, colorImageView, null);
+        vkDestroyImage(device, colorImage, null);
+        vkFreeMemory(device, colorImageMemory, null);
+
         vkDestroyImageView(device, depthImageView, null);
         vkDestroyImage(device, depthImage, null);
         vkFreeMemory(device, depthImageMemory, null);
